@@ -153,6 +153,9 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Best guess implemented:** "within three months before the record date" = bought on or
   after the same date 3 months earlier and before the record date; "within nine months after" =
   sold after the record date and on or before the same date 9 months later. Record date
-  defaults to the ex-date (T+1). The ignored loss includes trade charges. If several bonus lots
-  qualify, the first bonus (by ex-date) takes the loss.
+  defaults to the ex-date (T+1). Shares bought on or after the ex-date are not entitled, so
+  they are excluded. The bonus shares must be allotted on or before the sale date to count as
+  "held". The loss is worked out per FIFO lot, not netted across all clause-(a) securities.
+  The ignored loss includes trade charges. If several bonus lots qualify, the first bonus (by
+  ex-date) takes the loss. Bonus shares supplied only as opening lots can't be checked (warning).
 - **Status:** open.

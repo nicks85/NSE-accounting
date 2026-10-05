@@ -111,8 +111,11 @@ def apply_split(lots: list[Lot], action: Split) -> tuple[list[Lot], list[str]]:
     return out, warnings
 
 
+BONUS_PREFIX = "BONUS:"
+
+
 def bonus_lot_id(action: Bonus) -> str:
-    return f"BONUS:{action.instrument}:{action.ex_date.isoformat()}"
+    return f"{BONUS_PREFIX}{action.instrument}:{action.ex_date.isoformat()}"
 
 
 def bonus_lot(lots: list[Lot], action: Bonus) -> tuple[Lot | None, list[str]]:

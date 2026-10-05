@@ -104,6 +104,14 @@ def compute_tax_year(
         line, line_notices = capital_gain_line(disposal, pack, fmv_2018 or {})
         lines.append(line)
         warnings.extend(line_notices)
+        if disposal.stripped_loss:
+            warnings.append(Notice(
+                "BONUS_STRIPPING",
+                f"Loss of ₹{disposal.stripped_loss} on {disposal.instrument} bought "
+                f"{disposal.acquired_on} is ignored (bonus stripping, 2025 Act s.175(9),(10); "
+                "1961 Act s.94(8)) and added to the cost of the bonus shares still held",
+                ref=disposal.close_trade_id,
+            ))
 
     nets: dict[Bucket, Decimal] = {}
     for line in lines:

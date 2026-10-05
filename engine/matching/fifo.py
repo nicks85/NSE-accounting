@@ -20,6 +20,7 @@ from decimal import Decimal
 
 from engine.dates import add_months
 from engine.matching.corporate_actions import (
+    BONUS_PREFIX,
     Bonus,
     CorporateAction,
     Split,
@@ -54,6 +55,12 @@ class FifoBook:
         self._bonuses: dict[str, list[Bonus]] = {}
         for lot in sorted(opening_lots, key=lambda lot: lot.acquired_on):
             self._lots.setdefault(lot.instrument, deque()).append(lot)
+            if lot.source_trade_id.startswith(BONUS_PREFIX):
+                self._warnings.append(
+                    f"{lot.source_trade_id}: bonus shares brought in as an opening lot; bonus "
+                    "stripping can't be checked for sales of the original shares without the "
+                    "bonus action (docs/OPEN_QUESTIONS.md Q-014)"
+                )
 
     def lots(self, instrument: str) -> deque[Lot]:
         return self._lots.setdefault(instrument, deque())
@@ -79,22 +86,21 @@ class FifoBook:
                 continue
             for action in self._bonuses.get(instrument, []):
                 record = action.record_on
+                # (a) bought within 3 months before the record date, and (b) held when the
+                # entitlement was fixed: a buy on or after the ex-date gets no bonus.
                 bought_in_window = add_months(record, -3) <= disposal.acquired_on < record
+                entitled = disposal.acquired_on < action.ex_date
                 sold_in_window = record < disposal.sold_on <= add_months(record, 9)
                 lot_id = bonus_lot_id(action)
-                held = [i for i, lot in enumerate(queue) if lot.source_trade_id == lot_id]
-                if not (bought_in_window and sold_in_window and held):
+                # (c) bonus shares already allotted and still held after the sale.
+                held = [i for i, lot in enumerate(queue)
+                        if lot.source_trade_id == lot_id and lot.acquired_on <= disposal.sold_on]
+                if not (bought_in_window and entitled and sold_in_window and held):
                     continue
                 loss = -disposal.gain
                 self._disposals[index] = replace(disposal, stripped_loss=loss)
                 bonus = queue[held[0]]
                 queue[held[0]] = replace(bonus, value=bonus.value + loss)
-                self._warnings.append(
-                    f"{disposal.close_trade_id}: loss of {loss} on {instrument} bought "
-                    f"{disposal.acquired_on} ignored under bonus stripping (2025 Act "
-                    f"s.175(9),(10); 1961 Act s.94(8)) and added to the cost of the bonus "
-                    f"shares from record date {record}"
-                )
                 break
 
     def _apply(self, trade: Trade) -> None:
