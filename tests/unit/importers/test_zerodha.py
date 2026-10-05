@@ -58,7 +58,7 @@ def test_duplicates_and_blank_lines() -> None:
 
 
 @pytest.mark.parametrize(("bad", "message"), [
-    ("", "file is empty"),
+    ("", "tradebook: file is empty"),
     ("symbol,isin\nX,Y\n", "missing column"),
 ])
 def test_rejects_wrong_files(bad: str, message: str) -> None:
@@ -67,7 +67,7 @@ def test_rejects_wrong_files(bad: str, message: str) -> None:
 
 
 @pytest.mark.parametrize(("row", "message"), [
-    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "row 2: trade_type 'hold'"),
+    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "tradebook row 2: trade_type 'hold'"),
     (Row("SYNTHA", "2025-05-01", "buy", "ten", "1"), "row 2 quantity: not a number"),
     (Row("SYNTHA", "05.01.2025", "buy", "1", "1"), "row 2 trade_date: unrecognised date"),
     (Row("SYNTHA", "2025-05-01", "buy", "0", "1"), "row 2: .*quantity must be positive"),
@@ -80,7 +80,7 @@ def test_row_errors_name_the_row(row: Row, message: str) -> None:
 
 def test_parsers() -> None:
     assert parse_decimal(" 1,234.50 ", where="x") == Decimal("1234.50")
-    with pytest.raises(ImportFormatError, match="finite"):
+    with pytest.raises(ImportFormatError, match="not a number"):
         parse_decimal("NaN", where="x")
     for text in ("2025-05-01", "01-05-2025", "01/05/2025", "2025/05/01", "2025-05-01T09:15:00",
                  "2025-05-01 09:15:00"):
@@ -89,7 +89,7 @@ def test_parsers() -> None:
 
 def test_multiple_files_deduplicated() -> None:
     a = tradebook_csv([Row("SYNTHA", "2025-05-01", "buy", "1", "1")])
-    result = parse_zerodha_tradebooks([a, a])
+    result = parse_zerodha_tradebooks([("fy24.csv", a), ("fy25.csv", a)])
     assert len(result.trades) == 1
     assert any("more than one file" in w for w in result.warnings)
 
@@ -115,6 +115,7 @@ def test_round_trip_fixture_to_gains() -> None:
 
 
 def test_round_trip_random_tradebooks_conserve_quantity() -> None:
+    seen_intraday = False
     for seed in range(20):
         rows = random_rows(seed, 60)
         trades = parse_zerodha_tradebook(tradebook_csv(rows)).trades
@@ -127,11 +128,109 @@ def test_round_trip_random_tradebooks_conserve_quantity() -> None:
         assert bought - sold == still_open
         assert sum(line.disposal.quantity for line in report.capital_gains) + (
             intraday_squared) == sold
+        seen_intraday = seen_intraday or intraday_squared > 0
+    assert seen_intraday
 
 
 def test_multiple_distinct_files_merge_in_date_order() -> None:
     later = tradebook_csv([Row("SYNTHA", "2025-06-01", "sell", "1", "2")])
     earlier = tradebook_csv([Row("SYNTHB", "2024-05-01", "buy", "1", "1")])
-    result = parse_zerodha_tradebooks([later, earlier])
+    result = parse_zerodha_tradebooks([("later.csv", later), ("earlier.csv", earlier)])
     assert [t.trade_date.year for t in result.trades] == [2024, 2025]
     assert not any("more than one file" in w for w in result.warnings)
+
+
+
+def _csv(*lines: str) -> str:
+    return ",".join(HEADER) + "\n" + "\n".join(lines) + "\n"
+
+
+def _line(symbol: str = "SYNTHA", isin: str = "INE000A01011", day: str = "2025-05-01",
+          exchange: str = "NSE", segment: str = "EQ", side: str = "buy", qty: str = "1",
+          price: str = "1", trade_id: str = "1", time: str = "2025-05-01T09:30:00",
+          auction: str = "false") -> str:
+    return ",".join([symbol, isin, day, exchange, segment, "EQ", side, auction, qty, price,
+                     trade_id, "9", time])
+
+
+def test_mixed_and_unpadded_time_formats_sort_by_actual_time() -> None:
+    result = parse_zerodha_tradebook(_csv(
+        _line(side="buy", trade_id="1", time="01-05-2025 10:00:00"),
+        _line(side="sell", trade_id="2", time="2025-05-01T09:30:00"),
+        _line(side="buy", trade_id="3", time="9:45:00"),
+    ))
+    assert [t.trade_id[-1] for t in result.trades] == ["2", "3", "1"]
+
+
+def test_missing_time_falls_back_to_file_order_with_warning() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(trade_id="1", time=""),
+                                          _line(trade_id="2", side="sell", time="")))
+    assert [t.side for t in result.trades] == [Side.BUY, Side.SELL]
+    assert any("without a readable execution time" in w for w in result.warnings)
+
+
+def test_merged_files_keep_time_order_within_a_day() -> None:
+    first = _csv(_line(trade_id="1", side="sell", time="2025-05-01T15:00:00"))
+    second = _csv(_line(trade_id="2", side="buy", time="2025-05-01T09:00:00"))
+    result = parse_zerodha_tradebooks([("a.csv", first), ("b.csv", second)])
+    assert [t.side for t in result.trades] == [Side.BUY, Side.SELL]
+
+
+def test_blank_trade_id_is_an_error() -> None:
+    with pytest.raises(ImportFormatError, match="missing trade_id"):
+        parse_zerodha_tradebook(_csv(_line(trade_id="")))
+
+
+def test_conflicting_duplicate_is_an_error() -> None:
+    with pytest.raises(ImportFormatError, match="appears twice with different details"):
+        parse_zerodha_tradebook(_csv(_line(qty="1"), _line(qty="2")))
+    with pytest.raises(ImportFormatError, match="appears in two files"):
+        parse_zerodha_tradebooks([("a", _csv(_line(qty="1"))), ("b", _csv(_line(qty="2")))])
+
+
+def test_same_trade_id_on_bse_and_nse_both_kept() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(exchange="NSE"), _line(exchange="BSE")))
+    assert len(result.trades) == 2
+
+
+def test_ambiguous_slash_dates_warn() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(day="05/01/2025", time="")))
+    assert result.trades[0].trade_date == date(2025, 1, 5)
+    assert any("day/month" in w for w in result.warnings)
+    clear = parse_zerodha_tradebook(_csv(_line(day="25/01/2025", time="")))
+    assert not any("day/month" in w for w in clear.warnings)
+
+
+def test_auction_and_fractional_quantity_warn() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(auction="true", qty="1.5")))
+    assert any("auction trade" in w for w in result.warnings)
+    assert any("fractional share quantity" in w for w in result.warnings)
+
+
+def test_lowercase_instrument_and_segment_normalised() -> None:
+    result = parse_zerodha_tradebook(_csv(
+        _line(symbol="nifty25junfut", isin="", segment="fo", exchange="NFO", trade_id="1"),
+        _line(symbol="NIFTY25JUNFUT", isin="", segment="FO", exchange="NFO", trade_id="2",
+              side="sell"),
+        _line(isin="ine000a01011", segment="eq", trade_id="3"),
+    ))
+    assert {t.instrument for t in result.trades} == {"NIFTY25JUNFUT", "INE000A01011"}
+
+
+def test_excel_style_variations() -> None:
+    text = _csv(_line(qty='"1,000.0"', price='"12,34,567.50"') + ",,").replace("\n", "\r\n")
+    [trade] = parse_zerodha_tradebook(text).trades
+    assert (trade.quantity, trade.price) == (Decimal("1000.0"), Decimal("1234567.50"))
+
+
+def test_short_row_and_bad_numbers() -> None:
+    with pytest.raises(ImportFormatError, match="2 columns"):
+        parse_zerodha_tradebook(_csv("SYNTHA,INE000A01011"))
+    for bad in ("1,2,3", "1_000", "1e3", "١٢"):
+        with pytest.raises(ImportFormatError, match="not a number"):
+            parse_decimal(bad, where="x")
+
+
+def test_unsupported_segment_codes_skipped() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(segment="NSE_EQ"), _line(segment="FUT")))
+    assert result.trades == ()

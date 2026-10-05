@@ -47,7 +47,8 @@ def random_rows(seed: int, count: int) -> list[Row]:
     rows = []
     for i in range(count):
         symbol = rng.choice(list(SYNTHETIC))
-        day = f"2025-{4 + i // 28:02d}-{1 + i % 28:02d}"
+        n = i // 2  # two trades per day, so same-day (intraday) pairs occur
+        day = f"2025-{4 + n // 28:02d}-{1 + n % 28:02d}"
         if held[symbol] and rng.random() < 0.4:
             qty = rng.randint(1, held[symbol])
             held[symbol] -= qty
@@ -57,5 +58,5 @@ def random_rows(seed: int, count: int) -> list[Row]:
             held[symbol] += qty
             side = "buy"
         price = f"{rng.randint(100, 5000)}.{rng.randint(0, 99):02d}"
-        rows.append(Row(symbol, day, side, str(qty), price))
+        rows.append(Row(symbol, day, side, str(qty), price, time=f"{9 + i % 2}:30:00"))
     return rows

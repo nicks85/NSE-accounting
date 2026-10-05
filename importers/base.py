@@ -27,18 +27,48 @@ def normalise_header(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
 
 
+NUMBER = re.compile(
+    r"-?(?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d+)?", re.ASCII
+)
+"""Plain digits, Western grouping (1,234,567) or Indian grouping (12,34,567), optional decimals."""
+
+
 def parse_decimal(text: str, *, where: str) -> Decimal:
-    cleaned = text.strip().replace(",", "")
+    cleaned = text.strip()
+    if not NUMBER.fullmatch(cleaned):
+        raise ImportFormatError(f"{where}: not a number: {text!r}")
     try:
-        value = Decimal(cleaned)
-    except InvalidOperation:
+        return Decimal(cleaned.replace(",", ""))
+    except InvalidOperation:  # pragma: no cover - the regex only admits valid decimals
         raise ImportFormatError(f"{where}: not a number: {text!r}") from None
-    if not value.is_finite():
-        raise ImportFormatError(f"{where}: not a finite number: {text!r}")
-    return value
 
 
 DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d")
+DATETIME_FORMATS = tuple(f"{d}{sep}%H:%M:%S" for d in DATE_FORMATS for sep in ("T", " "))
+
+
+def is_ambiguous_date(text: str) -> bool:
+    """dd/mm/yyyy where both parts are ≤ 12 could be a US-locale mm/dd/yyyy re-save."""
+    match = re.fullmatch(r"(\d{1,2})/(\d{1,2})/\d{4}", text.strip().split(" ")[0])
+    if match is None:
+        return False
+    return int(match[1]) <= 12 and int(match[2]) <= 12 and match[1] != match[2]
+
+
+def parse_datetime(text: str, on: date) -> datetime | None:
+    """Execution timestamp, or a bare time (H:MM[:SS]) on ``on``; None when unparseable."""
+    cleaned = text.strip()
+    for fmt in DATETIME_FORMATS:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.combine(on, datetime.strptime(cleaned, fmt).time())
+        except ValueError:
+            continue
+    return None
 
 
 def parse_date(text: str, *, where: str) -> date:

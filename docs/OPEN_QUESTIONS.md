@@ -53,6 +53,8 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Problem:** s.43(5) defines a speculative transaction as one settled without delivery, but
   doesn't say how to allocate units within a day. Brokers' Tax P&L reports use this netting,
   and exchange settlement nets the same way, but no CBDT citation has been found.
+- **Also:** scrips are identified by ISIN, so a BSE buy and an NSE sell of the same ISIN on the
+  same day are netted as intraday too.
 - **Needed:** CBDT circular / ruling or CA confirmation.
 - **Status:** open.
 
@@ -170,7 +172,8 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   trade_type, auction, quantity, price, trade_id, order_id, order_execution_time) come from
   third-party parsers; date formats, `trade_type` casing and segment codes (EQ / FO) are
   assumptions. Headers are matched by name, tolerant of case and spacing. XLSX not supported
-  yet.
+  yet. Dates with "/" are read as day/month (warning when ambiguous). `auction` rows are
+  imported as normal trades with a warning; `series` is ignored.
 - **Also:** trade numbers are assumed unique per exchange per day (dedupe key exchange + date +
   trade_id). The tradebook has no charges or STT; trades import with zero charges, slightly
   overstating gains.
