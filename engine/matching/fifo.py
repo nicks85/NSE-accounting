@@ -73,7 +73,8 @@ class FifoBook:
                 return
             remaining = remaining_or_none
 
-        queue.append(
+        _enqueue(
+            queue,
             Lot(
                 instrument=trade.instrument,
                 acquired_on=trade.trade_date,
@@ -95,7 +96,7 @@ class FifoBook:
         else:
             lot, warnings = bonus_lot(list(queue), action)
             if lot is not None:
-                queue.append(lot)
+                _enqueue(queue, lot)
         self._warnings.extend(warnings)
 
     def result(self) -> MatchResult:
@@ -163,3 +164,15 @@ def _disposal(lot: Lot, closing: Trade) -> Disposal:
         open_trade_id=lot.source_trade_id,
         close_trade_id=closing.trade_id,
     )
+
+
+def _enqueue(queue: deque[Lot], lot: Lot) -> None:
+    """Insert ``lot`` keeping the queue ordered by acquisition date (stable for equal dates).
+
+    Needed because a bonus lot is dated at allotment, which can be after buys made on or just
+    after the ex-date; FIFO follows the order shares were acquired.
+    """
+    index = len(queue)
+    while index > 0 and queue[index - 1].acquired_on > lot.acquired_on:
+        index -= 1
+    queue.insert(index, lot)

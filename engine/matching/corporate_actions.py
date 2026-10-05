@@ -5,12 +5,12 @@ Both take effect at the start of ``ex_date``, before any trade on that date.
 
 from dataclasses import dataclass, replace
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_FLOOR
 
-from engine.models import Lot
+from engine.models import Lot, Segment
 from engine.money import ZERO
 
-UNVERIFIED_SPLIT = True
+UNVERIFIED_SPLIT = True  # surfaced as a warning on every split applied
 """Split treatment (cost unchanged, holding period carried over) follows standard practice
 but no statutory citation has been confirmed. See docs/OPEN_QUESTIONS.md Q-002."""
 
@@ -63,28 +63,43 @@ class Bonus:
 CorporateAction = Split | Bonus
 
 
+def _adjustable(lot: Lot) -> bool:
+    """Corporate actions adjust cash-equity holdings only. Exchanges adjust F&O contracts
+    (strike and lot size) themselves."""
+    return lot.segment is Segment.EQUITY and lot.is_long
+
+
 def apply_split(lots: list[Lot], action: Split) -> tuple[list[Lot], list[str]]:
-    """Return the lots after a split, plus warnings for fractional results."""
-    ratio = Decimal(action.new) / Decimal(action.old)
+    """Return the lots after a split, plus warnings (always the UNVERIFIED notice)."""
+    warnings = [
+        f"{action.instrument} split {action.old}:{action.new} on {action.ex_date}: "
+        "treatment UNVERIFIED (cost and holding period carried over), see "
+        "docs/OPEN_QUESTIONS.md Q-002"
+    ]
     out: list[Lot] = []
-    warnings: list[str] = []
+    before = after = ZERO
     for lot in lots:
-        quantity = lot.quantity * ratio
-        if quantity != quantity.to_integral_value():
-            warnings.append(
-                f"{action.instrument} split {action.old}:{action.new} on {action.ex_date}: "
-                f"lot {lot.source_trade_id} becomes fractional ({quantity}); kept as-is, "
-                "check the cash paid for the fraction"
-            )
+        if not _adjustable(lot):
+            out.append(lot)
+            continue
+        quantity = lot.quantity * action.new / action.old
+        before += lot.quantity
+        after += quantity
         out.append(replace(lot, quantity=quantity))
+    if (before * action.new) % action.old:
+        warnings.append(
+            f"{action.instrument} split {action.old}:{action.new} on {action.ex_date}: "
+            f"holding of {before} becomes fractional ({after}); fractional lots kept, check "
+            "the cash paid for the fraction (a sale, see Q-002)"
+        )
     return out, warnings
 
 
 def bonus_lot(lots: list[Lot], action: Bonus) -> tuple[Lot | None, list[str]]:
     """Return the new bonus lot for the given holdings (or None), plus warnings."""
-    held = sum((lot.quantity for lot in lots if lot.is_long), ZERO)
+    held = sum((lot.quantity for lot in lots if _adjustable(lot)), ZERO)
     entitled = held * action.bonus / action.held
-    allotted = entitled.to_integral_value(rounding="ROUND_FLOOR")
+    allotted = entitled.to_integral_value(rounding=ROUND_FLOOR)
     warnings: list[str] = []
     if entitled != allotted:
         warnings.append(

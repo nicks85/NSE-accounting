@@ -4,7 +4,7 @@ import pytest
 
 from engine.matching.corporate_actions import Bonus, Split
 from engine.matching.fifo import match_fifo
-from engine.models import Lot
+from engine.models import Lot, Segment
 from tests.factories import dec, trade
 
 ISIN = "INE000A01011"
@@ -18,7 +18,8 @@ def test_split_multiplies_quantity_keeps_cost_and_date() -> None:
     [d] = result.disposals
     assert (d.quantity, d.cost, d.sale_value, d.acquired_on) == (
         dec(50), dec(10000), dec(12500), date(2022, 1, 10))
-    assert not result.warnings
+    [warning] = result.warnings
+    assert "UNVERIFIED" in warning and "Q-002" in warning
 
 
 def test_split_applies_before_trades_on_ex_date() -> None:
@@ -36,7 +37,7 @@ def test_consolidation_with_fraction_warns() -> None:
     )
     [lot] = result.open_lots
     assert lot.quantity == dec("3.5")
-    assert "fractional" in result.warnings[0]
+    assert "fractional" in result.warnings[1]
 
 
 def test_bonus_creates_zero_cost_lot_from_allotment_date() -> None:
@@ -83,3 +84,83 @@ def test_invalid_ratios_rejected() -> None:
         Split(ISIN, date(2023, 1, 1), old=0, new=1)
     with pytest.raises(ValueError):
         Bonus(ISIN, date(2023, 1, 1), held=1, bonus=0)
+
+
+def test_consolidation_is_exact_without_false_fraction_warning() -> None:
+    result = match_fifo([trade("BUY", "2022-01-10", 21, 10)],
+                        actions=[Split(ISIN, date(2023, 6, 1), old=7, new=3)])
+    [lot] = result.open_lots
+    assert lot.quantity == dec(9) and str(lot.quantity) == "9"
+    assert len(result.warnings) == 1  # only the UNVERIFIED notice
+
+
+def test_fraction_check_uses_aggregate_holding() -> None:
+    result = match_fifo(
+        [trade("BUY", "2022-01-10", 3, 10), trade("BUY", "2022-02-10", 5, 10)],
+        actions=[Split(ISIN, date(2023, 6, 1), old=2, new=1)],
+    )
+    assert sum(lot.quantity for lot in result.open_lots) == dec(4)
+    assert len(result.warnings) == 1
+
+
+def test_corporate_actions_ignore_fno_lots() -> None:
+    fut = trade("SELL", "2023-05-01", 50, 100, instrument=ISIN, segment=Segment.FNO)
+    result = match_fifo([fut], actions=[Split(ISIN, date(2023, 6, 1), old=1, new=5),
+                                        Bonus(ISIN, date(2023, 7, 1), held=1, bonus=1)])
+    [lot] = result.open_lots
+    assert lot.quantity == dec(-50)
+
+
+def test_buy_on_ex_date_is_matched_before_later_dated_bonus_lot() -> None:
+    result = match_fifo(
+        [
+            trade("BUY", "2023-01-01", 10, 100, trade_id="OLD"),
+            trade("BUY", "2023-06-01", 5, 50, trade_id="EX"),
+            trade("SELL", "2024-08-01", 15, 60),
+        ],
+        actions=[Bonus(ISIN, date(2023, 6, 1), held=1, bonus=1,
+                       allotment_date=date(2023, 6, 3))],
+    )
+    assert [d.open_trade_id for d in result.disposals] == ["OLD", "EX"]
+    [bonus] = result.open_lots
+    assert bonus.source_trade_id.startswith("BONUS:")
+
+
+def test_split_then_bonus() -> None:
+    result = match_fifo(
+        [trade("BUY", "2022-01-10", 10, 1000)],
+        actions=[Split(ISIN, date(2023, 1, 1), old=1, new=2),
+                 Bonus(ISIN, date(2023, 6, 1), held=2, bonus=1)],
+    )
+    assert [lot.quantity for lot in result.open_lots] == [dec(20), dec(10)]
+    assert result.open_lots[0].cost == dec(10000)
+
+
+def test_partly_sold_lot_before_bonus() -> None:
+    result = match_fifo(
+        [trade("BUY", "2022-01-10", 10, 100), trade("SELL", "2023-03-01", 4, 120)],
+        actions=[Bonus(ISIN, date(2023, 6, 1), held=1, bonus=1)],
+    )
+    assert [lot.quantity for lot in result.open_lots] == [dec(6), dec(6)]
+
+
+def test_sale_before_ex_date_is_not_entitled() -> None:
+    result = match_fifo(
+        [trade("BUY", "2022-01-10", 10, 100), trade("SELL", "2023-05-31", 10, 120)],
+        actions=[Bonus(ISIN, date(2023, 6, 1), held=1, bonus=1)],
+    )
+    assert not result.open_lots
+
+
+def test_split_with_no_holding_only_warns_unverified() -> None:
+    result = match_fifo([], actions=[Split(ISIN, date(2023, 1, 1), old=1, new=2)])
+    assert not result.open_lots and len(result.warnings) == 1
+
+
+def test_two_actions_same_ex_date_apply_in_input_order() -> None:
+    result = match_fifo(
+        [trade("BUY", "2022-01-10", 10, 100)],
+        actions=[Bonus(ISIN, date(2023, 6, 1), held=1, bonus=1),
+                 Split(ISIN, date(2023, 6, 1), old=1, new=2)],
+    )
+    assert [lot.quantity for lot in result.open_lots] == [dec(20), dec(20)]
