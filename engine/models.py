@@ -99,6 +99,9 @@ class Lot:
     source_trade_id: str
     segment: Segment = Segment.EQUITY
     intraday: bool = False
+    split_factor: Decimal = Decimal(1)
+    """Shares per share held on 31-Jan-2018, from splits/consolidations after that date. The
+    published 31-Jan-2018 FMV is divided by this for grandfathering (Q-006)."""
 
     def __post_init__(self) -> None:
         for name in ("quantity", "value", "charges", "stt"):
@@ -166,6 +169,7 @@ class Disposal:
     stt: Decimal
     open_trade_id: str
     close_trade_id: str
+    split_factor: Decimal = Decimal(1)
 
     @property
     def gain(self) -> Decimal:

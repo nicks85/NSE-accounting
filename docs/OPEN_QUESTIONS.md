@@ -77,3 +77,72 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Needed:** track a cumulative split factor per lot (or per-share FMV on the lot) when
   grandfathering is implemented; confirm treatment with a citation.
 - **Status:** open.
+
+## Q-007 — FY 2024-25: which LTCG portion gets the ₹1.25 lakh exemption
+
+- **Area:** `engine/rules/fy2024_25.py`, `engine/rules/setoff.py` step 5.
+- **Best guess implemented:** the exemption is applied to LTCG taxed at 12.5% (transfers on or
+  after 23-Jul-2024) before LTCG taxed at 10%. This minimises tax.
+- **Known:** the CBDT FAQ (Q7) confirms ₹1.25 lakh applies to the whole of FY 2024-25 but does
+  not say how to allocate it between the two rates.
+- **Needed:** CA confirmation, or the ITR-2 AY 2025-26 Schedule 112A/CG instructions.
+- **Status:** open (best guess, flagged in output).
+
+## Q-008 — Order of set-off between rate buckets
+
+- **Area:** `engine/rules/setoff.py`.
+- **Best guess implemented:** losses are set off against the highest-rate gains first;
+  short-term losses go against STCG before LTCG; brought-forward losses oldest first, and LTCL
+  before STCL.
+- **Problem:** the Act says which gains a loss may be set off against, not the order between
+  eligible buckets. The ITR utility may apply its own order.
+- **Status:** open (best guess, flagged in output).
+
+## Q-009 — STT-paid condition for the special equity rates
+
+- **Area:** `engine/classify/capital_gains.py`.
+- **Best guess implemented:** every delivery disposal of listed equity is assumed to meet the
+  STT conditions of s.196 / s.198 (s.111A / s.112A), so the 20% / 12.5% rates apply.
+- **Problem:** off-market transfers, and acquisitions without STT (IPO, bonus, ESOP, etc.,
+  which have notified exceptions), are not checked.
+- **Status:** open (best guess, flagged in output).
+
+## Q-010 — F&O loss against capital gains in the same year
+
+- **Area:** `engine/rules/setoff.py` step 3.
+- **Best guess implemented:** a current-year F&O loss not absorbed by speculative income is set
+  off against capital gains (highest rate first) under s.109 / s.71; the rest is carried
+  forward.
+- **Problem:** inter-head set-off is mandatory against the taxpayer's other heads too (house
+  property, other sources; not salary), which Kosh doesn't see. The result may differ from the
+  final return.
+- **Status:** open (best guess, flagged in output).
+
+## Q-011 — Carry forward requires a timely return
+
+- **Area:** carry-forward ledger.
+- **Rule:** 1961 Act s.80 — losses under s.72, s.73, s.74 carry forward only if the return of
+  loss was filed by the due date. The 2025 Act equivalent was not located in
+  `docs/sources/` yet (s.263-related provisions mention returns of loss).
+- **Implemented as:** carried-forward losses are listed with a warning; the engine can't know
+  whether returns were filed on time.
+- **Status:** open (2025 citation needed).
+
+## Q-012 — Scope of the tax figure
+
+- **Area:** `engine/api.py` (`special_rate_tax`).
+- **Implemented as:** tax at the special rates on capital gains only. Not applied: surcharge,
+  health and education cess, rebate, and the adjustment where other income is below the basic
+  exemption limit (2025 Act s.196(2), s.198(3); 1961 Act s.111A(1) proviso, s.112A(3)).
+  Business income is reported but taxed at slab rates outside Kosh.
+- **Status:** open (scope decision for later phases).
+
+## Q-013 — Holding-period boundary
+
+- **Area:** `engine/classify/capital_gains.py`.
+- **Best guess implemented:** a listed share is long-term only if sold *after* the same calendar
+  date 12 months later (bought 10-Jan-2023: sold 10-Jan-2024 is short-term, 11-Jan-2024 is
+  long-term). Dates that don't exist are clamped (29-Feb → 28-Feb).
+- **Basis:** s.2(101)(a),(b) "held for not more than twelve months immediately preceding the
+  date of its transfer"; exact day-counting convention not stated.
+- **Status:** open.

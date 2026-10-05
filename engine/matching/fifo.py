@@ -162,6 +162,7 @@ def _disposal(lot: Lot, closing: Trade) -> Disposal:
         stt=lot.stt + closing.stt,
         open_trade_id=lot.source_trade_id,
         close_trade_id=closing.trade_id,
+        split_factor=lot.split_factor,
     )
 
 

@@ -12,6 +12,10 @@ from engine.money import ZERO
 
 ACT_2025 = "https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
 
+GRANDFATHERING_FMV_DATE = date(2018, 1, 31)
+"""FMV date for grandfathering: 2025 Act s.90(8)(b); 1961 Act s.55(2)(ac). Splits after this
+date change the number of shares per share whose FMV was published."""
+
 UNVERIFIED_SPLIT = True  # surfaced as a warning on every split applied
 """The cost side of a split is cited (2025 Act s.90(9)(d); 1961 Act s.55(2)(b)(v)), but carrying
 over the holding period rests on practice, not an explicit provision. See Q-002."""
@@ -88,7 +92,10 @@ def apply_split(lots: list[Lot], action: Split) -> tuple[list[Lot], list[str]]:
         quantity = lot.quantity * action.new / action.old
         before += lot.quantity
         after += quantity
-        out.append(replace(lot, quantity=quantity))
+        factor = lot.split_factor
+        if action.ex_date > GRANDFATHERING_FMV_DATE:
+            factor = factor * action.new / action.old
+        out.append(replace(lot, quantity=quantity, split_factor=factor))
     if (before * action.new) % action.old:
         warnings.append(
             f"{action.instrument} split {action.old}:{action.new} on {action.ex_date}: "
