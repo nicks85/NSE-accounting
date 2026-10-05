@@ -22,3 +22,4 @@ app/src-tauri/gen/
 *.sqlite
 *.db
 .DS_Store
+app/*.tsbuildinfo
