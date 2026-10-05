@@ -58,3 +58,4 @@ tr.total td { font-weight: 700; }
 .source { display: block; color: var(--muted); font-size: 0.85em; }
 .source code { user-select: all; word-break: break-all; }
 .inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0; }
+.pill-error { background: var(--error-soft); color: var(--error); border: 1px solid #e3a3a3; }

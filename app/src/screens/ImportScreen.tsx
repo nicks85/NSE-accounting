@@ -33,6 +33,11 @@ type ImportResult = {
   scheme_names: Record<string, string>;
 };
 
+/** FIFO order within a day follows execution time when the broker gives it. */
+function byDateThenTime(a: Trade, b: Trade): number {
+  return a.trade_date.localeCompare(b.trade_date) || (a.executed_at ?? "").localeCompare(b.executed_at ?? "");
+}
+
 async function toBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
@@ -54,6 +59,11 @@ export function ImportScreen() {
   const [error, setError] = useState<string | null>(null);
   const [last, setLast] = useState<(ImportResult & { added: number }) | null>(null);
   const source = SOURCES.find((s) => s.id === broker)!;
+  const missingColumns = broker === "mapped"
+    ? MAPPED_FIELDS.filter((f) => f.required && !mapping[f.field]?.trim()).map((f) => f.label)
+    : [];
+  const missingIds = broker === "mapped" && !mapping.isin?.trim() && !mapping.symbol?.trim();
+  const missingVenue = broker === "mapped" && !mapping.exchange?.trim() && !mapping.segment?.trim();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -69,16 +79,24 @@ export function ImportScreen() {
           : {}),
       };
       const result = await rpc<ImportResult>("import", params);
-      const known = new Set(session.trades.map((t) => t.trade_id));
-      const fresh = result.trades.filter((t) => !known.has(t.trade_id));
-      update({
-        trades: [...session.trades, ...fresh].sort((a, b) => a.trade_date.localeCompare(b.trade_date)),
-        sources: fresh.length === 0 ? session.sources
-          : [...session.sources, `${result.source}: ${files.map((f) => f.name).join(", ")}`],
-        fundClasses: { ...result.suggested_classes, ...session.fundClasses },
-        names: { ...result.scheme_names, ...session.names },
+      const names = files.map((f) => f.name).join(", ");
+      let added = 0;
+      // Merge against the latest state, not the one captured before the await.
+      update((current) => {
+        const known = new Set(current.trades.map((t) => t.trade_id));
+        const fresh = result.trades.filter((t) => !known.has(t.trade_id));
+        added = fresh.length;
+        const guessed = Object.keys(result.suggested_classes).filter((isin) => !(isin in current.fundClasses));
+        return {
+          trades: [...current.trades, ...fresh].sort(byDateThenTime),
+          sources: fresh.length === 0 ? current.sources : [...current.sources, `${result.source}: ${names}`],
+          fundClasses: { ...result.suggested_classes, ...current.fundClasses },
+          unconfirmed: [...current.unconfirmed, ...guessed],
+          names: { ...result.scheme_names, ...current.names },
+        };
       });
-      setLast({ ...result, added: fresh.length });
+      setLast({ ...result, added });
+      setPassword("");
       setFiles([]);
       setInputKey((k) => k + 1); // so the same file can be chosen again
     } catch (e) {
@@ -131,7 +149,14 @@ export function ImportScreen() {
           </fieldset>
         )}
 
-        <button type="submit" className="primary" disabled={busy || files.length === 0 || (broker === "cas" && !password)}>
+        {broker === "mapped" && (missingColumns.length > 0 || missingIds || missingVenue) && (
+          <p className="muted" role="status">
+            Still needed: {[...missingColumns, ...(missingIds ? ["ISIN or contract symbol"] : []),
+              ...(missingVenue ? ["exchange or segment"] : [])].join(", ")}
+          </p>
+        )}
+        <button type="submit" className="primary" disabled={busy || files.length === 0 || (broker === "cas" && !password)
+          || missingColumns.length > 0 || missingIds || missingVenue}>
           {busy ? "Importing…" : "Import files"}
         </button>
       </form>
@@ -162,7 +187,10 @@ export function ImportScreen() {
               {session.trades.length} trades — {Object.entries(segments).map(([seg, n]) => `${n} ${seg === "EQUITY" ? "shares" : seg === "FNO" ? "F&O" : "mutual fund"}`).join(", ")}
             </p>
             <ul>{session.sources.map((s, i) => <li key={i}>{s}</li>)}</ul>
-            <button type="button" onClick={() => { update({ trades: [], sources: [] }); setLast(null); }}>Clear all</button>
+            <button type="button" onClick={() => {
+              update({ trades: [], sources: [], fundClasses: {}, names: {}, fmv2018: {}, unconfirmed: [], broughtForward: [] });
+              setLast(null);
+            }}>Clear all</button>
           </>
         )}
       </section>

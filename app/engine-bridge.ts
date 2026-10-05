@@ -19,6 +19,7 @@ function startEngine() {
   const child: ChildProcessWithoutNullStreams = spawn(program, args, {
     cwd: ROOT,
     stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PYTHONUTF8: "1" },
   });
   const pending: Pending[] = [];
   createInterface({ input: child.stdout }).on("line", (line) => pending.shift()?.(line));
@@ -38,12 +39,35 @@ function startEngine() {
   return { child, send };
 }
 
+const MAX_BODY = 150 * 1024 * 1024; // base64 of the engine's 100 MB import cap
+
+function reject(res: import("node:http").ServerResponse, status: number, message: string) {
+  res.statusCode = status;
+  res.end(message);
+}
+
 function middleware(): Connect.NextHandleFunction {
   let engine: ReturnType<typeof startEngine> | undefined;
   return (req, res, next) => {
     if (req.url !== "/__kosh/rpc" || req.method !== "POST") return next();
+    // Only the app's own page may call: JSON content type (forces a CORS preflight for other
+    // sites) and, when the browser sends one, an Origin matching this server.
+    if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) {
+      return reject(res, 415, "expected application/json");
+    }
+    const origin = req.headers.origin;
+    if (origin && new URL(origin).host !== req.headers.host) return reject(res, 403, "cross-origin");
     let body = "";
-    req.on("data", (chunk) => (body += chunk));
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY) {
+        reject(res, 413, "request too large");
+        req.destroy();
+        return;
+      }
+      body += chunk;
+    });
     req.on("end", async () => {
       if (!engine || engine.child.exitCode !== null) engine = startEngine();
       const line = await engine.send(body);

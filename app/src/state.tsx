@@ -26,6 +26,8 @@ export type Session = {
   fmv2018: Record<string, string>;
   names: Record<string, string>;
   broughtForward: LossEntry[];
+  /** Fund classes pre-filled from a CAS guess, not yet confirmed by the user. */
+  unconfirmed: string[];
 };
 
 export const EMPTY_SESSION: Session = {
@@ -36,9 +38,12 @@ export const EMPTY_SESSION: Session = {
   fmv2018: {},
   names: {},
   broughtForward: [],
+  unconfirmed: [],
 };
 
-type Store = { session: Session; update: (change: Partial<Session>) => void };
+type Change = Partial<Session> | ((current: Session) => Partial<Session>);
+/** Functional changes merge against the latest state (no stale overwrites after an await). */
+type Store = { session: Session; update: (change: Change) => void };
 
 const SessionContext = createContext<Store | null>(null);
 
@@ -48,7 +53,11 @@ export function SessionProvider({ children, initial = EMPTY_SESSION }: {
 }) {
   const [session, setSession] = useState(initial);
   const store = useMemo(
-    () => ({ session, update: (change: Partial<Session>) => setSession((s) => ({ ...s, ...change })) }),
+    () => ({
+      session,
+      update: (change: Change) =>
+        setSession((s) => ({ ...s, ...(typeof change === "function" ? change(s) : change) })),
+    }),
     [session],
   );
   return <SessionContext.Provider value={store}>{children}</SessionContext.Provider>;

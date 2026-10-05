@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactElement } from "react";
 import { rpc } from "./engine";
 import { ReportProvider } from "./report";
 import { SessionProvider } from "./state";
@@ -32,6 +32,16 @@ function EngineBadge() {
 export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactElement>> }) {
   const [tab, setTab] = useState<TabId>("import");
   const current = TABS.find((t) => t.id === tab)!;
+  // Arrow/Home/End move between tabs (WAI-ARIA tabs pattern, automatic activation).
+  function onTabKey(event: KeyboardEvent<HTMLElement>) {
+    const index = TABS.findIndex((t) => t.id === tab);
+    const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: TABS.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    const target = TABS[(next + TABS.length) % TABS.length];
+    setTab(target.id);
+    document.getElementById(`tab-${target.id}`)?.focus();
+  }
   return (
     <SessionProvider>
       <ReportProvider>
@@ -40,7 +50,7 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
           <h1>Kosh</h1>
           <p className="tagline">Offline Indian share-market tax calculator. Your data never leaves your computer.</p>
         </header>
-        <nav className="tabs" role="tablist" aria-label="Sections">
+        <nav className="tabs" role="tablist" aria-label="Sections" onKeyDown={onTabKey}>
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -50,16 +60,19 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
               className={t.id === tab ? "tab tab-active" : "tab"}
               aria-selected={t.id === tab}
               aria-controls="panel"
+              tabIndex={t.id === tab ? 0 : -1}
               onClick={() => setTab(t.id)}
             >
               {t.label}
             </button>
           ))}
         </nav>
-        <main id="panel" className="panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-          <h2 id="panel-title">{current.label}</h2>
-          <p className="muted">{current.blurb}</p>
-          {screens[tab] ?? <p className="placeholder">This screen arrives in a later step.</p>}
+        <main className="panel">
+          <div id="panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
+            <h2 id="panel-title">{current.label}</h2>
+            <p className="muted">{current.blurb}</p>
+            {screens[tab] ?? <p className="placeholder">This screen arrives in a later step.</p>}
+          </div>
         </main>
         <footer className="footer">
           <EngineBadge />

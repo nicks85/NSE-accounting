@@ -112,3 +112,31 @@ describe("GainsScreen", () => {
     expect(within(gains).getAllByText("—")).toHaveLength(2);
   });
 });
+
+describe("GainsScreen inputs (QA)", () => {
+  it("rejects an invalid FMV inline, accepts commas and clears with an empty box", async () => {
+    mockEngine(report());
+    await renderWith({});
+    const fmv = await screen.findByLabelText(/31-Jan-2018 price for INE000A01011/);
+    fireEvent.change(fmv, { target: { value: "abc" } });
+    await act(async () => fireEvent.blur(fmv));
+    expect(fmv.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Enter a price like 1234.55")).toBeTruthy();
+    fireEvent.change(fmv, { target: { value: "1,234.50" } });
+    await act(async () => fireEvent.blur(fmv));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).fmv2018).toEqual({ INE000A01011: "1234.50" });
+    fireEvent.change(fmv, { target: { value: "" } });
+    await act(async () => fireEvent.blur(fmv));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).fmv2018).toEqual({});
+  });
+
+  it("marks CAS-guessed classes until confirmed and keeps the report while recomputing", async () => {
+    mockEngine(report());
+    await renderWith({ fundClasses: { INF000E01011: "equity-oriented" }, unconfirmed: ["INF000E01011"] });
+    expect(await screen.findByText(/guessed from the CAS/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Confirm" })));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).unconfirmed).toEqual([]);
+    expect(screen.queryByText(/guessed from the CAS/)).toBeNull();
+    expect(screen.getByLabelText("Summary")).toBeTruthy(); // not unmounted by the recompute
+  });
+});

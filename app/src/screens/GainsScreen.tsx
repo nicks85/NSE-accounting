@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { inr, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
+import { inr, isZero, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
 import { useSession, type FundClass } from "../state";
 
 const YEARS = [
@@ -31,50 +31,81 @@ export function Why({ citations }: { citations: Citation[] }) {
   );
 }
 
+function FmvInput({ isin, missing }: { isin: string; missing: boolean }) {
+  const { session, update } = useSession();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="row">
+      <label htmlFor={`fmv-${isin}`}>31-Jan-2018 price for {session.names[isin] ?? isin} (₹ per share/unit)</label>
+      <input
+        id={`fmv-${isin}`}
+        inputMode="decimal"
+        placeholder="e.g. 1,234.55"
+        defaultValue={session.fmv2018[isin] ?? ""}
+        aria-invalid={error !== null}
+        aria-describedby={error ? `fmv-${isin}-error` : undefined}
+        onBlur={(e) => {
+          const value = e.target.value.replace(/,/g, "").trim();
+          if (value === "") {
+            setError(null);
+            update((s) => {
+              const fmv2018 = { ...s.fmv2018 };
+              delete fmv2018[isin];
+              return { fmv2018 };
+            });
+          } else if (/^\d+(\.\d+)?$/.test(value) && !isZero(value)) {
+            setError(null);
+            update((s) => ({ fmv2018: { ...s.fmv2018, [isin]: value } }));
+          } else {
+            setError("Enter a price like 1234.55");
+          }
+        }}
+      />
+      {error && <span id={`fmv-${isin}-error`} className="pill pill-error">{error}</span>}
+      {!error && (missing
+        ? <span className="pill pill-warn">missing — actual cost used</span>
+        : <span className="muted">Highest price on 31-Jan-2018 (NAV for unlisted fund units).</span>)}
+    </div>
+  );
+}
+
 function NeedsInput({ report, unclassified }: { report: Report; unclassified: string[] }) {
   const { session, update } = useSession();
   // Pre-2018 holdings sold long-term: ask for (or let the user edit) the 31-Jan-2018 price.
   const fmvNeeded = [...new Set(report.capital_gains
     .filter((l) => l.acquired_on <= "2018-01-31" && l.bucket.startsWith("LTCG") && !l.manual)
     .map((l) => l.isin))];
-  const missingFmv = fmvNeeded.filter((isin) => !(isin in session.fmv2018));
-  const guessed = Object.keys(session.fundClasses);
-  if (unclassified.length === 0 && fmvNeeded.length === 0 && guessed.length === 0) return null;
+  const funds = [...new Set([...unclassified, ...session.unconfirmed])];
+  if (funds.length === 0 && fmvNeeded.length === 0) return null;
+  const confirm = (isin: string) => update((s) => ({ unconfirmed: s.unconfirmed.filter((i) => i !== isin) }));
   return (
     <section aria-label="Needs your input" className="needs">
       <h3>Needs your input</h3>
-      {[...unclassified, ...guessed.filter((i) => !unclassified.includes(i))].map((isin) => (
+      {funds.map((isin) => (
         <div key={isin} className="row">
           <label htmlFor={`class-${isin}`}>Fund class for {session.names[isin] ?? isin}</label>
           <select
             id={`class-${isin}`}
             value={session.fundClasses[isin] ?? ""}
-            onChange={(e) => update({ fundClasses: { ...session.fundClasses, [isin]: e.target.value as FundClass } })}
+            onChange={(e) => {
+              const value = e.target.value as FundClass;
+              update((s) => ({ fundClasses: { ...s.fundClasses, [isin]: value },
+                               unconfirmed: s.unconfirmed.filter((i) => i !== isin) }));
+            }}
           >
             <option value="" disabled>Choose…</option>
             {CLASSES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
           {unclassified.includes(isin) && <span className="pill pill-warn">not classified — treated as “other”</span>}
+          {session.unconfirmed.includes(isin) && (
+            <>
+              <span className="pill pill-warn">guessed from the CAS — please confirm</span>{" "}
+              <button type="button" className="link" onClick={() => confirm(isin)}>Confirm</button>
+            </>
+          )}
         </div>
       ))}
-      {fmvNeeded.map((isin) => (
-        <div key={isin} className="row">
-          <label htmlFor={`fmv-${isin}`}>31-Jan-2018 price for {session.names[isin] ?? isin} (₹ per share/unit)</label>
-          <input
-            id={`fmv-${isin}`}
-            inputMode="decimal"
-            placeholder="e.g. 1234.55"
-            defaultValue={session.fmv2018[isin] ?? ""}
-            onBlur={(e) => {
-              const value = e.target.value.trim();
-              if (/^\d+(\.\d+)?$/.test(value)) update({ fmv2018: { ...session.fmv2018, [isin]: value } });
-            }}
-          />
-          {missingFmv.includes(isin)
-            ? <span className="pill pill-warn">missing — actual cost used</span>
-            : <span className="muted">Highest price on 31-Jan-2018 (NAV for unlisted fund units).</span>}
-        </div>
-      ))}
+      {fmvNeeded.map((isin) => <FmvInput key={isin} isin={isin} missing={!(isin in session.fmv2018)} />)}
     </section>
   );
 }
@@ -106,7 +137,7 @@ function LineRow({ line }: { line: GainLine }) {
               Held from {line.acquired_on} to {line.sold_on}; long-term if sold after {line.long_term_after}.
               Sale {inr(line.sale_value)} − expenses {inr(line.transfer_expenses)} − cost {inr(line.cost)}
               {line.grandfathered_fmv !== null && <> (actual cost {inr(line.actual_cost)}, 31-Jan-2018 value {inr(line.grandfathered_fmv)})</>}
-              {line.stripped_loss !== "0" && Number(line.stripped_loss) !== 0 && <> + ignored bonus-stripping loss {inr(line.stripped_loss)}</>}
+              {!isZero(line.stripped_loss) && <> + ignored bonus-stripping loss {inr(line.stripped_loss)}</>}
               {" "}= {inr(line.gain)}.
             </p>
             <Why citations={line.citations} />
@@ -147,6 +178,7 @@ export function GainsScreen() {
       {state.status === "error" && <div className="error" role="alert">Couldn’t calculate: {state.message}</div>}
       {state.status === "ready" && (
         <>
+          {state.stale && <p className="muted" aria-live="polite">Updating…</p>}
           <NeedsInput report={state.report} unclassified={state.unclassified} />
 
           <section aria-label="Summary">

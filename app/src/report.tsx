@@ -44,7 +44,7 @@ export type Report = {
 export type ReportState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; report: Report; unclassified: string[] }
+  | { status: "ready"; report: Report; unclassified: string[]; stale?: boolean }
   | { status: "error"; message: string };
 
 const ReportContext = createContext<ReportState>({ status: "idle" });
@@ -60,7 +60,8 @@ export function ReportProvider({ children }: { children: ReactNode }) {
       setState({ status: "idle" });
       return;
     }
-    setState({ status: "loading" });
+    // Keep showing the previous result while recalculating, so inputs keep their focus.
+    setState((prev) => (prev.status === "ready" ? { ...prev, stale: true } : { status: "loading" }));
     const params = computeParams(session);
     Promise.all([
       rpc<Report>("compute", params),
@@ -81,8 +82,16 @@ export function useReport(): ReportState {
 }
 
 /** Display an engine decimal string in Indian grouping with 2 decimals. Display only. */
+const DECIMAL = /^-?\d+(\.\d+)?$/;
+
+/** True for an engine decimal string equal to zero ("0", "0.000", "-0.00"). */
+export function isZero(value: string): boolean {
+  return /^-?0*(\.0*)?$/.test(value);
+}
+
 export function inr(value: string): string {
-  const negative = value.trim().startsWith("-");
+  if (!DECIMAL.test(value)) return value; // never mis-render something that isn't a plain decimal
+  const negative = value.startsWith("-");
   const [whole, fraction = ""] = value.replace("-", "").split(".");
   let paise = (fraction + "000").slice(0, 3);
   let rupees = whole.replace(/^0+(?=\d)/, "") || "0";

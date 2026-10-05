@@ -68,7 +68,14 @@ describe("ImportScreen", () => {
       trades: [], warnings: [], suggested_classes: {}, scheme_names: {} } });
     renderScreen();
     fireEvent.click(screen.getByLabelText(/Groww, Angel One/));
-    fireEvent.change(screen.getByLabelText("Trade date *"), { target: { value: "Date" } });
+    fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("g.csv")] } });
+    expect(screen.getByText(/Still needed/).textContent).toMatch(/Trade date.*ISIN or contract symbol.*exchange or segment/);
+    expect((screen.getByRole("button", { name: "Import files" }) as HTMLButtonElement).disabled).toBe(true);
+    for (const [label, value] of [["Trade date *", "Date"], ["Buy / sell *", "Type"], ["Quantity *", "Qty"],
+                                  ["Price *", "Price"], ["Trade / order number *", "Id"], ["ISIN (shares)", "ISIN"],
+                                  ["Exchange", "Exch"]]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
     fireEvent.change(screen.getByLabelText("Broker name"), { target: { value: "Angel One" } });
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("g.csv")] } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
@@ -98,5 +105,30 @@ describe("ImportScreen", () => {
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("x.csv")] } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
     expect((await screen.findByRole("alert")).textContent).toMatch(/row 3: bad price/);
+  });
+});
+
+describe("ImportScreen state (QA)", () => {
+  it("merges a slow import into the latest state and Clear all resets everything", async () => {
+    let release: () => void = () => {};
+    vi.stubGlobal("fetch", vi.fn((_u: string, init: RequestInit) => new Promise<Response>((resolve) => {
+      const id = JSON.parse(String(init.body)).id;
+      release = () => resolve(new Response(JSON.stringify({ id, result: { source: "Zerodha", format_confirmed: false,
+        trades: [TRADE], warnings: [], suggested_classes: { INF000E01011: "specified" }, scheme_names: {} } })));
+    })));
+    function Changer() {
+      const { update } = useSession();
+      return <button type="button" onClick={() => update({ fmv2018: { INE000A01011: "800" } })}>change</button>;
+    }
+    render(<SessionProvider><ImportScreen /><Changer /><Probe /></SessionProvider>);
+    fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("tb.csv")] } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    fireEvent.click(screen.getByRole("button", { name: "change" }));  // edit while the import is running
+    await act(async () => release());
+    await screen.findByText(/Imported 1 trade/);
+    expect(state().fmv2018).toEqual({ INE000A01011: "800" });  // not overwritten
+    expect(state().unconfirmed).toEqual(["INF000E01011"]);
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+    expect(state()).toMatchObject({ trades: [], fundClasses: {}, fmv2018: {}, names: {}, unconfirmed: [] });
   });
 });
