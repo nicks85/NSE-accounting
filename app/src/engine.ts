@@ -26,7 +26,11 @@ async function transport(request: string): Promise<string> {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<string>("engine_rpc", { request });
   }
-  const response = await fetch("/__kosh/rpc", { method: "POST", body: request });
+  const response = await fetch("/__kosh/rpc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: request,
+  });
   if (!response.ok) throw new EngineError("Bridge", `engine bridge returned ${response.status}`);
   return response.text();
 }
@@ -34,6 +38,9 @@ async function transport(request: string): Promise<string> {
 export async function rpc<T>(method: string, params: object = {}): Promise<T> {
   const id = nextId++;
   const reply = JSON.parse(await transport(JSON.stringify({ id, method, params }))) as Response<T>;
+  if (reply.id !== id && reply.id !== null) {
+    throw new EngineError("Protocol", `engine answered request ${reply.id}, expected ${id}`);
+  }
   if (reply.error) throw new EngineError(reply.error.type, reply.error.message);
   return reply.result as T;
 }

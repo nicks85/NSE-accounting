@@ -220,15 +220,22 @@ def report_to_json(report: TaxYearReport) -> JSON:
 
 # --- methods --------------------------------------------------------------------------------
 
+MAX_IMPORT_BYTES = 100 * 1024 * 1024
+"""Total size accepted in one import request (decoded)."""
+
+
 def _files(params: JSON) -> list[tuple[str, bytes]]:
     files = params.get("files") or []
     if not files:
         raise RequestError("no files given")
     try:
-        return [(str(f["name"]), base64.b64decode(f["data_base64"], validate=True))
-                for f in files]
+        decoded = [(str(f["name"]), base64.b64decode(f["data_base64"], validate=True))
+                   for f in files]
     except (KeyError, ValueError):
         raise RequestError("each file needs a name and base64 data") from None
+    if sum(len(data) for _, data in decoded) > MAX_IMPORT_BYTES:
+        raise RequestError(f"files are larger than {MAX_IMPORT_BYTES // (1024 * 1024)} MB in total")
+    return decoded
 
 
 def m_import(params: JSON) -> JSON:
@@ -337,7 +344,13 @@ def handle(request: Any) -> JSON:
 
 
 def main() -> None:
-    """Serve requests: one JSON object per line on stdin, one response per line on stdout."""
+    """Serve requests: one JSON object per line on stdin, one response per line on stdout.
+    Both streams are UTF-8 whatever the platform's locale (Windows defaults to cp1252, which
+    can't encode "₹")."""
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
     for line in sys.stdin:
         if not line.strip():
             continue

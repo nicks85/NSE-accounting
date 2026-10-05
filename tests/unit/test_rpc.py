@@ -164,3 +164,26 @@ def test_main_loop_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
     responses = [json.loads(line) for line in out.getvalue().splitlines()]
     assert responses[0]["id"] == 3 and "version" in responses[0]["result"]
     assert responses[1]["error"]["type"] == "JSONDecodeError"
+
+
+def test_utf8_on_a_cp1252_locale() -> None:
+    """QA case: Windows' default cp1252 can't encode ₹; the engine must still answer."""
+    import os
+
+    request = json.dumps({"id": 1, "method": "compute", "params": {
+        "year": 2025, "trades": TRADES[:1], "brought_forward": [
+            {"origin_year": 2016, "kind": "Short-term capital loss", "amount": "5"}]}},
+        ensure_ascii=False) + "\n"
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+    out = subprocess.run([sys.executable, "-m", "engine.rpc"], input=request.encode("utf-8"),
+                         capture_output=True, check=True, cwd=ROOT, env=env)
+    response = json.loads(out.stdout.decode("utf-8"))
+    assert any("₹5" in w["message"] for w in response["result"]["warnings"])
+
+
+def test_import_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from engine import rpc
+
+    monkeypatch.setattr(rpc, "MAX_IMPORT_BYTES", 3)
+    response = call("import", broker="zerodha", files=[{"name": "a", "data_base64": b64("abcd")}])
+    assert "larger than" in response["error"]["message"]
