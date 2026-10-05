@@ -1,8 +1,9 @@
 """FIFO lot matching per instrument.
 
-Listed shares held in demat form are matched first-in-first-out: Income-tax Act 1961,
-s.45(2A) and its Explanation; carried into the Income-tax Act 2025 (see
-docs/OPEN_QUESTIONS.md Q-001 for the pending 2025 section citation).
+Cost of acquisition and period of holding of securities held in demat form are determined
+first-in-first-out: Income-tax Act 2025 s.67(7)(c); Income-tax Act 1961 s.45(2A).
+Source: docs/sources/income-tax-act-2025-as-amended-by-fa-2026.pdf (official text from
+https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf).
 F&O positions are matched FIFO as well (including short positions). That is a matching
 convention for business-income computation, not a statutory rule.
 
