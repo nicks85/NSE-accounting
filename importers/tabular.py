@@ -5,7 +5,7 @@ warnings) is common so every broker gets the same safeguards."""
 import csv
 import io
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 from engine.models import Segment, Side, Trade
@@ -18,6 +18,7 @@ from importers.base import (
     parse_datetime,
     parse_decimal,
 )
+from importers.xlsx import is_xlsx, read_xlsx
 
 FIELDS = ("trade_date", "side", "quantity", "price", "isin", "symbol", "segment", "exchange",
           "trade_id", "executed_at", "auction", "expiry", "strike", "option_type")
@@ -107,7 +108,37 @@ def _contract(symbol: str, expiry: str, strike: str, option_type: str, *, where:
 
 def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook") -> ImportResult:
     """Parse one CSV export. ``name`` labels warnings and errors."""
-    rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
+    return parse_rows(list(csv.reader(io.StringIO(text.lstrip("\ufeff")))), profile, name=name)
+
+
+def load_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradebook",
+                   password: str | None = None, sheet: str | int | None = None) -> ImportResult:
+    """Parse a CSV or XLSX file's bytes (detected from content, not the file name)."""
+    if is_xlsx(data):
+        try:
+            rows = read_xlsx(data, password=password, sheet=sheet)
+        except ImportFormatError as error:
+            raise ImportFormatError(f"{name}: {error}") from None
+        return parse_rows(rows, profile, name=name)
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        result = parse_tradebook(data.decode("cp1252", errors="replace"), profile, name=name)
+        note = f"{name}: not UTF-8; read as Windows-1252, check names and symbols"
+        return replace(result, warnings=(*result.warnings, note))
+    return parse_tradebook(text, profile, name=name)
+
+
+def load_tradebooks(files: Iterable[tuple[str, bytes]], profile: BrokerProfile, *,
+                    password: str | None = None) -> ImportResult:
+    """Load several CSV/XLSX files given as (name, bytes); identical trades count once."""
+    parts = [load_tradebook(data, profile, name=name, password=password) for name, data in files]
+    return merge_results(parts, profile.source, profile.confirmed)
+
+
+def parse_rows(rows: list[list[str]], profile: BrokerProfile, *, name: str = "tradebook"
+               ) -> ImportResult:
+    """Parse rows of cell text (from CSV or XLSX)."""
     if not any(any(c.strip() for c in row) for row in rows):
         raise ImportFormatError(f"{name}: file is empty")
     try:

@@ -8,7 +8,13 @@ from collections.abc import Iterable, Mapping
 
 from engine.models import Segment, Side
 from importers.base import ImportFormatError, ImportResult, normalise_header
-from importers.tabular import FIELDS, BrokerProfile, parse_tradebook, parse_tradebooks
+from importers.tabular import (
+    FIELDS,
+    BrokerProfile,
+    load_tradebook,
+    parse_tradebook,
+    parse_tradebooks,
+)
 
 MUST_MAP = ("trade_date", "side", "quantity", "price", "trade_id")
 DEFAULT_SEGMENTS = {"EQ": Segment.EQUITY, "FO": Segment.FNO}
@@ -73,3 +79,9 @@ def parse_mapped_tradebook(text: str, profile: BrokerProfile, *, name: str = "tr
 def parse_mapped_tradebooks(files: Iterable[tuple[str, str]], profile: BrokerProfile
                             ) -> ImportResult:
     return parse_tradebooks(files, profile)
+
+
+def load_mapped_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradebook",
+                          password: str | None = None) -> ImportResult:
+    """CSV or XLSX bytes; Groww's XLSX is protected with the PAN in capitals."""
+    return load_tradebook(data, profile, name=name, password=password)
