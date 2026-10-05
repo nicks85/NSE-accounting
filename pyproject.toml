@@ -7,6 +7,7 @@ license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "casparser>=1.4.1",
+    "jsonschema>=4.26.0",
     "msoffcrypto-tool>=6.0.0",
 ]
 
@@ -17,6 +18,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pytest-github-actions-annotate-failures>=0.4.2",
+    "types-jsonschema>=4.26.0.20260518",
 ]
 
 [build-system]
