@@ -57,3 +57,4 @@ button.link { background: none; border: none; color: var(--accent); text-decorat
 tr.total td { font-weight: 700; }
 .source { display: block; color: var(--muted); font-size: 0.85em; }
 .source code { user-select: all; word-break: break-all; }
+.inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0; }
