@@ -41,3 +41,8 @@ button.primary { background: var(--accent); color: #fff; border: none; padding: 
 button.primary:disabled { opacity: 0.5; cursor: default; }
 label { display: block; margin: 8px 0 4px; font-weight: 600; }
 input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; padding: 8px 12px 12px; }
+legend { font-weight: 600; padding: 0 4px; }
+label.choice { font-weight: normal; display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 12px; }
+section { margin-top: 16px; }

@@ -38,20 +38,23 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
           <h1>Kosh</h1>
           <p className="tagline">Offline Indian share-market tax calculator. Your data never leaves your computer.</p>
         </header>
-        <nav className="tabs" aria-label="Sections">
+        <nav className="tabs" role="tablist" aria-label="Sections">
           {TABS.map((t) => (
             <button
               key={t.id}
+              id={`tab-${t.id}`}
               type="button"
+              role="tab"
               className={t.id === tab ? "tab tab-active" : "tab"}
-              aria-current={t.id === tab ? "page" : undefined}
+              aria-selected={t.id === tab}
+              aria-controls="panel"
               onClick={() => setTab(t.id)}
             >
               {t.label}
             </button>
           ))}
         </nav>
-        <main className="panel" aria-labelledby="panel-title">
+        <main id="panel" className="panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
           <h2 id="panel-title">{current.label}</h2>
           <p className="muted">{current.blurb}</p>
           {screens[tab] ?? <p className="placeholder">This screen arrives in a later step.</p>}

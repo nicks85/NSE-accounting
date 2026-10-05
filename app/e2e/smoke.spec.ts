@@ -12,7 +12,7 @@ test("app shell talks to the local engine and makes no external requests", async
     timeout: 30_000,
   });
   for (const tab of ["Holdings", "Gains", "Losses", "Export", "Import"]) {
-    await page.getByRole("button", { name: tab }).click();
+    await page.getByRole("tab", { name: tab }).click();
     await expect(page.getByRole("heading", { level: 2, name: tab })).toBeVisible();
   }
   expect(external).toEqual([]);

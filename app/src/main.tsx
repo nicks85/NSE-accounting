@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ImportScreen } from "./screens/ImportScreen";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <App screens={{ import: <ImportScreen /> }} />
   </StrictMode>,
 );

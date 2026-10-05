@@ -28,10 +28,11 @@ describe("App shell", () => {
   it("switches tabs and shows each screen", async () => {
     mockEngine({ result: { version: "1" } });
     await act(async () => render(<App screens={{ gains: <p>gains screen</p> }} />));
-    fireEvent.click(screen.getByRole("button", { name: "Gains" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Gains" }));
     expect(screen.getByRole("heading", { level: 2, name: "Gains" })).toBeTruthy();
     expect(screen.getByText("gains screen")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Gains" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("tab", { name: "Gains" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("tab-gains");
   });
 
   it("reports an engine error", async () => {
