@@ -310,3 +310,22 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Needed:** an anonymised real detailed CAS (CAMS and KFintech) to confirm the mapping.
 - **Status:** open.
 
+
+## Q-025 — ITR export: scope and line placement
+
+- **Area:** `engine/export/itr.py`.
+- **Implemented as:** Kosh fills Schedule 112A and Schedule CG of the official AY 2026-27
+  ITR-2 / ITR-3 JSON (schemas in `engine/export/schemas/`), validated against the schema. It
+  does not produce a complete return: personal details, other heads of income, Schedules
+  CYLA/BFLA/CFL, Schedule BP (ITR-3 business income), Schedule SI and the tax computation must
+  be completed in the official utility.
+- **Best guesses:** s.111A gains go to CG A2 (section code 1A); non-equity fund short-term gains
+  to A5 "other assets"; s.112 LTCG on fund units to B "assets not covered elsewhere";
+  Schedule 112A uses one row per ISIN for holdings acquired on or before 31-Jan-2018 and a single
+  CONSOLIDATED row for later ones, with the ISIN used as the name when none is given;
+  TotalBalance112A (ITR-2) = Balance112A; amounts are rounded to whole rupees per line.
+  The quarter-wise accrual table splits each column's gain left after current-year set-off in
+  proportion to that column's net gain per period. Schema-valid JSON may still fail the
+  utility's own business-rule checks.
+- **Needed:** a test upload into the official ITR utility; CA review of line placement.
+- **Status:** open.

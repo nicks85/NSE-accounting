@@ -70,8 +70,9 @@ trapped below instead."""
 
 def test_runtime_dependencies_make_no_network_calls() -> None:
     """In a fresh interpreter, with socket connect/DNS replaced by tripwires, import the engine,
-    importers and their dependencies (msoffcrypto for protected XLSX; casparser with its parser
-    and ISIN-database modules for CAS PDFs), run an ISIN lookup and a CAS parse. No tripwire may
+    importers, exporters and their dependencies (msoffcrypto for protected XLSX; casparser with
+    its parser and ISIN-database modules for CAS PDFs; jsonschema for ITR validation), run an
+    ISIN lookup, a CAS parse and a schema validation. No tripwire may
     fire and no network-only module may be loaded."""
     import subprocess
     import sys
@@ -91,7 +92,10 @@ def test_runtime_dependencies_make_no_network_calls() -> None:
         "import engine.api, importers.zerodha, importers.upstox, importers.mapped, "
         "importers.xlsx, importers.cas, msoffcrypto, msoffcrypto.format.ooxml, casparser, "
         "casparser.parsers.cams_detailed, casparser.parsers._isin, casparser.analysis, "
-        "casparser_isin, rapidfuzz, dateutil, pypdfium2\n"
+        "casparser_isin, rapidfuzz, dateutil, pypdfium2, jsonschema, referencing, "
+        "engine.export.itr\n"
+        "from engine.export.schemas_registry import validate\n"
+        "validate({}, 'ITR-2', 2025, 'Schedule112A')\n"
         "from casparser.parsers._isin import isin_search\n"
         "isin_search('Synthetic Flexi Cap Fund', 'CAMS', 'X1', 'INF000E01011')\n"
         "from importers.cas import load_cas\n"
