@@ -12,6 +12,7 @@ taxed at 10%.
 from datetime import date
 from decimal import Decimal
 
+from engine.rules import common
 from engine.rules.base import CBDT_CG_FAQ_URL, Act, Citation, RatePeriod, RulePack
 from engine.rules.common import COMMON
 
@@ -28,5 +29,6 @@ PACK = RulePack(
         RatePeriod(date(2024, 7, 23), stcg_equity=Decimal("0.20"), ltcg_equity=Decimal("0.125")),
     ),
     ltcg_exemption=Decimal(125000),
-    citations={**COMMON, EXEMPTION_ORDER.topic: EXEMPTION_ORDER},
+    citations={**COMMON, EXEMPTION_ORDER.topic: EXEMPTION_ORDER,
+               common.BONUS_STRIPPING_1961.topic: common.BONUS_STRIPPING_1961},
 )

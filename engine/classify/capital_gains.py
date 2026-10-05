@@ -91,7 +91,9 @@ def capital_gain_line(
             if disposal.split_factor != 1:
                 citations.append(common.GRANDFATHERING_AFTER_SPLIT)
 
-    gain = disposal.sale_value - disposal.transfer_expenses - cost
+    gain = disposal.sale_value - disposal.transfer_expenses - cost + disposal.stripped_loss
+    if disposal.stripped_loss:
+        citations.append(pack.citations[common.BONUS_STRIPPING.topic])
     line = CapitalGainLine(
         disposal=disposal,
         bucket=Bucket(term, rate),

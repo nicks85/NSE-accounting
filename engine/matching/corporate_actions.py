@@ -51,7 +51,8 @@ class Bonus:
     The bonus shares form a new lot whose holding period runs from the date of allotment:
     2025 Act s.2(101)(c)(C)(IV); 1961 Act s.2(42A). ``allotment_date`` defaults to
     ``ex_date`` when the actual date is not known — see docs/OPEN_QUESTIONS.md Q-003.
-    Bonus stripping (2025 Act s.175(9),(10)) is not yet applied — see Q-005.
+    Bonus stripping (2025 Act s.175(9),(10); 1961 Act s.94(8)) is applied by the FIFO book,
+    using ``record_date`` (defaults to ``ex_date``: equal under T+1 settlement).
     Entitlement is computed on the total holding; fractional entitlements are not allotted
     as shares and are dropped with a warning.
     """
@@ -61,6 +62,11 @@ class Bonus:
     held: int
     bonus: int
     allotment_date: date | None = None
+    record_date: date | None = None
+
+    @property
+    def record_on(self) -> date:
+        return self.record_date or self.ex_date
 
     def __post_init__(self) -> None:
         if self.held <= 0 or self.bonus <= 0:
@@ -105,6 +111,10 @@ def apply_split(lots: list[Lot], action: Split) -> tuple[list[Lot], list[str]]:
     return out, warnings
 
 
+def bonus_lot_id(action: Bonus) -> str:
+    return f"BONUS:{action.instrument}:{action.ex_date.isoformat()}"
+
+
 def bonus_lot(lots: list[Lot], action: Bonus) -> tuple[Lot | None, list[str]]:
     """Return the new bonus lot for the given holdings (or None), plus warnings."""
     held = sum((lot.quantity for lot in lots if _adjustable(lot)), ZERO)
@@ -126,6 +136,6 @@ def bonus_lot(lots: list[Lot], action: Bonus) -> tuple[Lot | None, list[str]]:
         value=ZERO,
         charges=ZERO,
         stt=ZERO,
-        source_trade_id=f"BONUS:{action.instrument}:{action.ex_date.isoformat()}",
+        source_trade_id=bonus_lot_id(action),
     )
     return lot, warnings

@@ -65,6 +65,10 @@ RETURN_OF_LOSS = Citation(
 LTCG_EXEMPTION = Citation(
     "LTCG on STT-paid equity up to ₹1,25,000 not taxed", "s.112A", "s.198(2)(a)",
     CBDT_CG_FAQ_URL)
+BONUS_STRIPPING = Citation(
+    "Loss on shares bought within 3 months before a bonus record date and sold within 9 months "
+    "after it is ignored and added to the cost of the bonus shares still held",
+    "s.94(8)", "s.175(9),(10)", ACT_2025_URL)
 ROUNDING = Citation(
     "Tax rounded to the nearest ₹10 (paise ignored, 5 and above rounds up)", "s.288B",
     "s.516", ACT_2025_URL)
@@ -76,6 +80,12 @@ COMMON = {
         GRANDFATHERING_AFTER_SPLIT, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION, SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,
-        CARRY_SPECULATIVE, RETURN_OF_LOSS, ROUNDING,
+        CARRY_SPECULATIVE, RETURN_OF_LOSS, BONUS_STRIPPING, ROUNDING,
     )
 }
+
+BONUS_STRIPPING_1961 = Citation(
+    BONUS_STRIPPING.topic, "s.94(8)", "s.175(9),(10)", ACT_2025_URL,
+    unverified=True, question="Q-005")
+"""For 1961 Act years: s.94(8)'s extension from units to securities (Finance Act 2022) is not
+yet checked against an official 1961 text."""

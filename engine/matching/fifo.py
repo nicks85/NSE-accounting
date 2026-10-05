@@ -14,15 +14,18 @@ against older delivery lots and reported as a capital gain.
 
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
+from engine.dates import add_months
 from engine.matching.corporate_actions import (
+    Bonus,
     CorporateAction,
     Split,
     apply_split,
     bonus_lot,
+    bonus_lot_id,
 )
 from engine.models import Disposal, Lot, Segment, Side, Trade
 
@@ -48,6 +51,7 @@ class FifoBook:
         self._lots: dict[str, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
         self._warnings: list[str] = []
+        self._bonuses: dict[str, list[Bonus]] = {}
         for lot in sorted(opening_lots, key=lambda lot: lot.acquired_on):
             self._lots.setdefault(lot.instrument, deque()).append(lot)
 
@@ -55,6 +59,45 @@ class FifoBook:
         return self._lots.setdefault(instrument, deque())
 
     def apply(self, trade: Trade) -> None:
+        first_new = len(self._disposals)
+        self._apply(trade)
+        if trade.side is Side.SELL and not self._allow_short:
+            self._strip_bonus(trade.instrument, first_new)
+
+    def _strip_bonus(self, instrument: str, first_new: int) -> None:
+        """Bonus stripping — Income-tax Act 2025 s.175(9),(10); 1961 Act s.94(8).
+
+        A loss on securities bought within 3 months before a bonus record date and sold within
+        9 months after it is ignored, if bonus securities are still held after the sale; the
+        ignored loss becomes the cost of the bonus securities still held. Window boundaries are
+        a best guess (docs/OPEN_QUESTIONS.md Q-014).
+        """
+        queue = self.lots(instrument)
+        for index in range(first_new, len(self._disposals)):
+            disposal = self._disposals[index]
+            if disposal.gain >= 0:
+                continue
+            for action in self._bonuses.get(instrument, []):
+                record = action.record_on
+                bought_in_window = add_months(record, -3) <= disposal.acquired_on < record
+                sold_in_window = record < disposal.sold_on <= add_months(record, 9)
+                lot_id = bonus_lot_id(action)
+                held = [i for i, lot in enumerate(queue) if lot.source_trade_id == lot_id]
+                if not (bought_in_window and sold_in_window and held):
+                    continue
+                loss = -disposal.gain
+                self._disposals[index] = replace(disposal, stripped_loss=loss)
+                bonus = queue[held[0]]
+                queue[held[0]] = replace(bonus, value=bonus.value + loss)
+                self._warnings.append(
+                    f"{disposal.close_trade_id}: loss of {loss} on {instrument} bought "
+                    f"{disposal.acquired_on} ignored under bonus stripping (2025 Act "
+                    f"s.175(9),(10); 1961 Act s.94(8)) and added to the cost of the bonus "
+                    f"shares from record date {record}"
+                )
+                break
+
+    def _apply(self, trade: Trade) -> None:
         is_buy = trade.side is Side.BUY
         queue = self.lots(trade.instrument)
         if not is_buy and trade.segment is Segment.EQUITY and not self._allow_short:
@@ -102,6 +145,7 @@ class FifoBook:
             lot, warnings = bonus_lot(list(queue), action)
             if lot is not None:
                 _enqueue(queue, lot)
+                self._bonuses.setdefault(action.instrument, []).append(action)
         self._warnings.extend(warnings)
 
     def result(self) -> MatchResult:
