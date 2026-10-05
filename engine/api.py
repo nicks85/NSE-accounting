@@ -12,13 +12,13 @@ from types import MappingProxyType
 
 from engine import __version__
 from engine.classify.business_income import BusinessIncome, business_income
-from engine.classify.capital_gains import Bucket, CapitalGainLine, capital_gain_line
-from engine.classify.funds import FundClass
+from engine.classify.capital_gains import Bucket, CapitalGainLine, Term, capital_gain_line
+from engine.classify.funds import FundClass, is_fund, isin_of
 from engine.classify.trades import classify_trades
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
 from engine.matching.fifo import match_fifo
-from engine.models import Disposal, Lot, Trade
+from engine.models import Disposal, Lot, Segment, Trade
 from engine.money import ZERO
 from engine.notices import Notice
 from engine.rules import common, pack_for_year
@@ -34,6 +34,7 @@ __all__ = [
     "compute_tax_year",
     "compute_tax_years",
     "engine_version",
+    "unclassified_funds",
 ]
 
 SCOPE_NOTE = Notice(
@@ -118,12 +119,19 @@ def compute_tax_year(
             ))
 
     nets: dict[Bucket, Decimal] = {}
+    gains: dict[Bucket, Decimal] = {}
+    losses: dict[Term, Decimal] = {}
     for line in lines:
-        if not line.manual:
-            nets[line.bucket] = nets.get(line.bucket, ZERO) + line.gain
+        if line.manual:
+            continue
+        nets[line.bucket] = nets.get(line.bucket, ZERO) + line.gain
+        if line.gain > 0:
+            gains[line.bucket] = gains.get(line.bucket, ZERO) + line.gain
+        elif line.gain < 0:
+            losses[line.bucket.term] = losses.get(line.bucket.term, ZERO) - line.gain
     business = business_income(_in_year(intraday.disposals, start_year),
                                _in_year(fno.disposals, start_year))
-    result = set_off(pack, nets, business.speculative, business.non_speculative,
+    result = set_off(pack, gains, losses, business.speculative, business.non_speculative,
                      brought_forward)
     tax = result.tax()
 
@@ -172,9 +180,13 @@ def compute_tax_years(
     actions: Iterable[CorporateAction] = (),
     fmv_2018: Mapping[str, Decimal] | None = None,
     fund_classes: Mapping[str, FundClass] | None = None,
+    fund_classes_by_year: Mapping[int, Mapping[str, FundClass]] | None = None,
     brought_forward: Iterable[LossEntry] = (),
 ) -> list[TaxYearReport]:
-    """Compute consecutive years, carrying each year's unabsorbed losses into the next."""
+    """Compute consecutive years, carrying each year's unabsorbed losses into the next.
+
+    A fund's class can change between years (the meaning of "specified fund" changed in
+    FY 2025-26): ``fund_classes_by_year[year]`` overrides ``fund_classes`` for that year."""
     trade_list, lot_list, action_list = list(trades), list(opening_lots), list(actions)
     years = sorted(start_years)
     if years and years != list(range(years[0], years[-1] + 1)):
@@ -183,8 +195,19 @@ def compute_tax_years(
     reports = []
     for year in years:
         report = compute_tax_year(year, trade_list, opening_lots=lot_list, actions=action_list,
-                                  fmv_2018=fmv_2018, fund_classes=fund_classes,
+                                  fmv_2018=fmv_2018,
+                                  fund_classes={**(fund_classes or {}),
+                                                **(fund_classes_by_year or {}).get(year, {})},
                                   brought_forward=carried)
         reports.append(report)
         carried = list(report.carried_forward)
     return reports
+
+
+def unclassified_funds(trades: Iterable[Trade], fund_classes: Mapping[str, FundClass]
+                       ) -> list[str]:
+    """ISINs of fund units (statement units or exchange-traded INF… ISINs) in ``trades`` that
+    have no class yet, for the UI's classification step."""
+    isins = {isin_of(t.instrument) for t in trades
+             if t.segment is Segment.MUTUAL_FUND or is_fund(t.instrument)}
+    return sorted(isins - set(fund_classes))

@@ -42,6 +42,13 @@ FUND_CLASS = Citation(
 FUND_FIFO_PER_FOLIO = Citation(
     "Fund units matched first-in-first-out within each folio", None, None, ACT_2025_URL,
     unverified=True, question="Q-020")
+LISTED_FUND_UNITS = Citation(
+    "Exchange-traded non-equity fund units treated like unlisted units (24 months)",
+    "s.2(42A)", "s.2(101)(a),(b)", ACT_2025_URL, unverified=True, question="Q-024")
+SPECIFIED_DEFINITION_1961 = Citation(
+    "Before FY 2025-26 a 'specified mutual fund' meant one with at most 35% in domestic "
+    "equity; check the class supplied", "s.50AA", None, ACT_2025_URL, unverified=True,
+    question="Q-019")
 STCG_EQUITY = Citation("STCG on STT-paid equity", "s.111A", "s.196", CBDT_CG_FAQ_URL)
 LTCG_EQUITY = Citation(
     "LTCG on STT-paid equity above the exemption", "s.112A", "s.198", CBDT_CG_FAQ_URL)
@@ -66,7 +73,8 @@ SETOFF_INTER_HEAD = Citation(
     "Business loss against other heads (not salary); capital loss not against other heads",
     "s.71", "s.109", ACT_2025_URL)
 SETOFF_ORDER = Citation(
-    "Losses set off against the highest-rate gains first", None, None, ACT_2025_URL,
+    "Losses set off against slab-rate gains first, then the highest special rate, non-exempt "
+    "before exemption-eligible LTCG", None, None, ACT_2025_URL,
     unverified=True, question="Q-008")
 INTER_HEAD_AGAINST_CG = Citation(
     "Unabsorbed F&O loss set off against this year's capital gains", "s.71", "s.109",
@@ -102,7 +110,8 @@ COMMON = {
     for c in (
         HOLDING_PERIOD, HOLDING_BOUNDARY, FIFO, COMPUTATION, GRANDFATHERING,
         GRANDFATHERING_AFTER_SPLIT, EQUITY_FUND, SPECIFIED_FUND, UNLISTED_HOLDING, OTHER_LTCG,
-        SLAB_STCG, FUND_CLASS, FUND_FIFO_PER_FOLIO, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION,
+        SLAB_STCG, FUND_CLASS, FUND_FIFO_PER_FOLIO, LISTED_FUND_UNITS,
+        SPECIFIED_DEFINITION_1961, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION,
         SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,

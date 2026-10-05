@@ -13,7 +13,7 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
-from engine.classify.funds import FOLIO_SEPARATOR, FundClass, isin_of
+from engine.classify.funds import FOLIO_SEPARATOR, FundClass, is_fund, isin_of
 from engine.dates import add_months
 from engine.models import Disposal, Segment
 from engine.money import INTERNAL_SCALE
@@ -56,10 +56,11 @@ class Bucket:
         return self.term is Term.LONG and self.regime is Regime.EQUITY
 
     @property
-    def sort_key(self) -> tuple[int, Decimal, str, str]:
-        """Highest rate first; slab-rate buckets count as highest (up to 30%+), Q-008."""
-        return (0 if self.rate is None else 1, -(self.rate or Decimal(0)), self.term.value,
-                self.regime.value)
+    def sort_key(self) -> tuple[int, Decimal, bool, str, str]:
+        """Set-off priority (Q-008): slab-rate buckets first (up to 30%+), then highest rate;
+        at equal rates, buckets outside the ₹1.25 lakh exemption before eligible ones."""
+        return (0 if self.rate is None else 1, -(self.rate or Decimal(0)),
+                self.exemption_eligible, self.term.value, self.regime.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,10 @@ class CapitalGainLine:
     funds); it is excluded from the totals and flagged."""
 
 
+SPECIFIED_DEFINITION_FROM = 2025
+"""Tax year from which "specified fund" means >65% debt (Finance (No. 2) Act 2024); earlier
+1961 Act years used "not more than 35% in domestic equity" (Q-019)."""
+
 BOUNDARY_DAYS = 3
 """Sales this close to the 12-month boundary are flagged (day-count convention, Q-013)."""
 
@@ -90,7 +95,8 @@ def capital_gain_line(
     fund_classes: Mapping[str, FundClass] | None = None,
 ) -> tuple[CapitalGainLine, list[Notice]]:
     """Compute one disposal's capital gain under ``pack``. Returns (line, notices)."""
-    if disposal.segment is Segment.MUTUAL_FUND:
+    fund = disposal.segment is Segment.MUTUAL_FUND or is_fund(disposal.instrument)
+    if fund:  # includes exchange-traded fund units bought through a broker
         fund_class = (fund_classes or {}).get(isin_of(disposal.instrument))
         if fund_class is not FundClass.EQUITY_ORIENTED:
             return _non_equity_fund_line(disposal, pack, fund_class)
@@ -102,7 +108,7 @@ def capital_gain_line(
     citations = [common.HOLDING_PERIOD, common.FIFO, common.COMPUTATION,
                  common.LTCG_EQUITY if term is Term.LONG else common.STCG_EQUITY,
                  common.STT_PAID_ASSUMED]
-    if disposal.segment is Segment.MUTUAL_FUND:
+    if fund:
         citations += [*_fund_citations(disposal), common.EQUITY_FUND]
     if abs((disposal.sold_on - long_term_after).days) <= BOUNDARY_DAYS:
         citations.append(common.HOLDING_BOUNDARY)
@@ -115,8 +121,8 @@ def capital_gain_line(
             warnings.append(Notice(
                 "MISSING_FMV",
                 f"{disposal.instrument} acquired {disposal.acquired_on} needs its 31-Jan-2018 "
-                "FMV (NAV for fund units) for grandfathering; actual cost used (may overstate "
-                "tax)",
+                "FMV for grandfathering (highest exchange price if listed, NAV for unlisted fund "
+                "units); actual cost used (may overstate tax)",
                 ref=disposal.close_trade_id,
             ))
         else:
@@ -157,6 +163,10 @@ def _non_equity_fund_line(
     s.2(42A), s.112. A missing class is treated as OTHER and flagged."""
     warnings: list[Notice] = []
     citations = [*_fund_citations(disposal), common.COMPUTATION]
+    if is_fund(disposal.instrument) and disposal.segment is not Segment.MUTUAL_FUND:
+        citations.append(common.LISTED_FUND_UNITS)
+    if fund_class is FundClass.SPECIFIED and pack.start_year < SPECIFIED_DEFINITION_FROM:
+        citations.append(common.SPECIFIED_DEFINITION_1961)
     if fund_class is None:
         warnings.append(Notice(
             "FUND_CLASS_MISSING",
@@ -171,16 +181,21 @@ def _non_equity_fund_line(
         bucket = Bucket(Term.SHORT, None, Regime.OTHER)
         long_term_after = date.max
         citations.append(common.SPECIFIED_FUND)
-    elif disposal.sold_on < pack.non_equity_cutover:
-        manual = True  # 36 months and 20% with indexation applied before 23-Jul-2024
+    elif (disposal.sold_on < pack.non_equity_cutover
+          and disposal.sold_on > add_months(disposal.acquired_on, 36)):
+        manual = True  # long-term before 23-Jul-2024: 20% with indexation
         bucket = Bucket(Term.SHORT, None, Regime.OTHER)
         warnings.append(Notice(
             "MANUAL",
-            f"{disposal.instrument} redeemed {disposal.sold_on}, before 23-Jul-2024: non-equity "
-            "fund gains then used a 36-month holding period and 20% with indexation, which "
-            "Kosh doesn't compute. Excluded from the totals; compute this line manually.",
+            f"{disposal.instrument} redeemed {disposal.sold_on}, before 23-Jul-2024, after more "
+            "than 36 months: long-term at 20% with indexation, which Kosh doesn't compute. "
+            "Excluded from the totals; compute this line manually.",
             question="Q-021", ref=disposal.close_trade_id,
         ))
+    elif disposal.sold_on < pack.non_equity_cutover:
+        long_term_after = add_months(disposal.acquired_on, 36)  # 36 months before 23-Jul-2024
+        bucket = Bucket(Term.SHORT, None, Regime.OTHER)
+        citations += [common.UNLISTED_HOLDING, common.SLAB_STCG]
     elif disposal.sold_on > long_term_after:
         bucket = Bucket(Term.LONG, pack.other_ltcg_rate, Regime.OTHER)
         citations += [common.UNLISTED_HOLDING, common.OTHER_LTCG]

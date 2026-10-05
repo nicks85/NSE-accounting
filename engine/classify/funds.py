@@ -28,3 +28,11 @@ def fund_instrument(isin: str, folio: str) -> str:
 
 def isin_of(instrument: str) -> str:
     return instrument.split(FOLIO_SEPARATOR, 1)[0]
+
+
+FUND_ISIN_PREFIX = "INF"
+"""Indian ISINs for mutual fund units (including exchange-traded funds) start with INF."""
+
+
+def is_fund(instrument: str) -> bool:
+    return isin_of(instrument).startswith(FUND_ISIN_PREFIX)

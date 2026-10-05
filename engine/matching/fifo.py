@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
+from engine.classify.funds import is_fund
 from engine.dates import add_months
 from engine.matching.corporate_actions import (
     BONUS_PREFIX,
@@ -142,6 +143,13 @@ class FifoBook:
         )
 
     def apply_action(self, action: CorporateAction) -> None:
+        if is_fund(action.instrument):
+            self._warnings.append(
+                f"{action.instrument}: {type(action).__name__.lower()} on {action.ex_date} "
+                "ignored: corporate actions on fund units (splits, bonus, scheme mergers) "
+                "aren't supported yet (docs/OPEN_QUESTIONS.md Q-023)"
+            )
+            return
         queue = self.lots(action.instrument)
         if isinstance(action, Split):
             lots, warnings = apply_split(list(queue), action)
