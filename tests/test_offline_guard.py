@@ -70,7 +70,16 @@ def test_runtime_dependencies_load_no_network_modules() -> None:
     import sys
 
     code = (
-        "import sys, engine.api, importers.zerodha, importers.upstox, importers.mapped, "
+        # Record who imports a network module, so a failure names the culprit.
+        "import sys, traceback\n"
+        "class _Spy:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name in {'socket', 'ssl', 'urllib.request', 'http.client'}:\n"
+        "            stack = ''.join(traceback.format_stack(limit=25))\n"
+        "            print('IMPORT ' + name + ' FROM:\\n' + stack, file=sys.stderr)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _Spy())\n"
+        "import engine.api, importers.zerodha, importers.upstox, importers.mapped, "
         "importers.xlsx, importers.cas, msoffcrypto, msoffcrypto.format.ooxml, casparser, "
         "casparser.parsers.cams_detailed, casparser.parsers._isin, casparser.analysis, "
         "casparser_isin, rapidfuzz, dateutil, pypdfium2\n"
@@ -84,4 +93,4 @@ def test_runtime_dependencies_load_no_network_modules() -> None:
     )
     out = subprocess.run(  # noqa: S603 - fixed command, no user input
         [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=ROOT)
-    assert out.stdout.strip() == ""
+    assert out.stdout.strip() == "", out.stderr[-4000:]
