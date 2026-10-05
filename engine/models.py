@@ -1,7 +1,7 @@
 """Core value types shared by importers, matching, classification and rules."""
 
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -38,6 +38,8 @@ class Trade:
     charges: Decimal = ZERO
     stt: Decimal = ZERO
     segment: Segment = Segment.EQUITY
+    executed_at: datetime | None = None
+    """Execution timestamp when the source has one; used to order trades within a day."""
 
     def __post_init__(self) -> None:
         for name in ("quantity", "price", "charges", "stt"):
