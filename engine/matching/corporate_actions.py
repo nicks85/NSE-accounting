@@ -65,8 +65,8 @@ CorporateAction = Split | Bonus
 
 def _adjustable(lot: Lot) -> bool:
     """Corporate actions adjust cash-equity holdings only. Exchanges adjust F&O contracts
-    (strike and lot size) themselves."""
-    return lot.segment is Segment.EQUITY and lot.is_long
+    (strike and lot size) themselves, and intraday positions are flat at day end."""
+    return lot.segment is Segment.EQUITY and lot.is_long and not lot.intraday
 
 
 def apply_split(lots: list[Lot], action: Split) -> tuple[list[Lot], list[str]]:
