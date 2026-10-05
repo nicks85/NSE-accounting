@@ -9,6 +9,7 @@ dependencies = [
     "casparser>=1.4.1",
     "jsonschema>=4.26.0",
     "msoffcrypto-tool>=6.0.0",
+    "reportlab>=5.0.1",
 ]
 
 [dependency-groups]
@@ -19,6 +20,7 @@ dev = [
     "mypy>=1.11",
     "pytest-github-actions-annotate-failures>=0.4.2",
     "types-jsonschema>=4.26.0.20260518",
+    "types-reportlab>=5.0.0.20260911",
 ]
 
 [build-system]
