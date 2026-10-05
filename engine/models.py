@@ -63,14 +63,18 @@ class Trade:
             stt=apportion(self.stt, quantity, self.quantity),
         )
 
-    def split(self, quantity: Decimal) -> "tuple[Trade, Trade | None]":
+    def split(
+        self, quantity: Decimal, head_suffix: str = "", rest_suffix: str = ""
+    ) -> "tuple[Trade, Trade | None]":
         """Split off the first ``quantity`` units; the remainder keeps the exact leftover
-        charges and STT so the two pieces always sum to the original."""
+        charges and STT so the two pieces always sum to the original. Suffixes are appended
+        to the pieces' trade IDs when they must stay distinguishable."""
         if quantity == self.quantity:
-            return self, None
-        head = self.portion(quantity, "")
+            return replace(self, trade_id=f"{self.trade_id}{head_suffix}"), None
+        head = self.portion(quantity, head_suffix)
         rest = replace(
             self,
+            trade_id=f"{self.trade_id}{rest_suffix}",
             quantity=self.quantity - quantity,
             charges=self.charges - head.charges,
             stt=self.stt - head.stt,

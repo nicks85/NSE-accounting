@@ -105,10 +105,17 @@ class FifoBook:
 
     def result(self) -> MatchResult:
         open_lots = tuple(lot for q in self._lots.values() for lot in q)
+        warnings = list(self._warnings)
+        warnings += [
+            f"{lot.source_trade_id}: intraday position of {lot.quantity} {lot.instrument} "
+            f"opened on {lot.acquired_on} was not squared off"
+            for lot in open_lots
+            if lot.intraday
+        ]
         return MatchResult(
             disposals=tuple(self._disposals),
             open_lots=open_lots,
-            warnings=tuple(self._warnings),
+            warnings=tuple(warnings),
         )
 
 

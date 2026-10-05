@@ -164,3 +164,30 @@ def test_two_actions_same_ex_date_apply_in_input_order() -> None:
                  Split(ISIN, date(2023, 6, 1), old=1, new=2)],
     )
     assert [lot.quantity for lot in result.open_lots] == [dec(20), dec(20)]
+
+
+def test_corporate_actions_skip_intraday_lots() -> None:
+    intraday = Lot(ISIN, date(2023, 6, 1), dec(10), dec(100), dec(0), dec(0), "I",
+                   intraday=True)
+    result = match_fifo([], opening_lots=[intraday],
+                        actions=[Split(ISIN, date(2023, 6, 1), old=1, new=2),
+                                 Bonus(ISIN, date(2023, 6, 1), held=1, bonus=1)])
+    [lot] = [lot for lot in result.open_lots if lot.source_trade_id == "I"]
+    assert lot.quantity == dec(10)
+    assert not [lot for lot in result.open_lots if lot.source_trade_id.startswith("BONUS")]
+
+
+def test_ex_date_intraday_round_trip_with_split() -> None:
+    from engine.classify.trades import classify_trades
+
+    classified = classify_trades([
+        trade("BUY", "2023-01-01", 10, 100),
+        trade("BUY", "2023-06-01", 5, 50),
+        trade("SELL", "2023-06-01", 5, 52),
+    ])
+    split = [Split(ISIN, date(2023, 6, 1), old=1, new=2)]
+    delivery = match_fifo(classified.delivery, actions=split)
+    assert [lot.quantity for lot in delivery.open_lots] == [dec(20)]
+    intraday = match_fifo(classified.intraday, allow_short=True)
+    [pair] = intraday.disposals
+    assert pair.gain == dec(10) and not intraday.open_lots

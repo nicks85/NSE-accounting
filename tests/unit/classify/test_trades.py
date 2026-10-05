@@ -36,7 +36,7 @@ def test_partial_square_off_leaves_delivery_remainder_with_exact_charges() -> No
     assert (intra_buy.quantity, intra_sell.quantity, carry.quantity) == (dec(10), dec(10), dec(20))
     assert intra_buy.charges + carry.charges == dec(3)
     assert intra_buy.stt + carry.stt == dec(3)
-    assert carry.side is Side.BUY and carry.trade_id == "B"
+    assert carry.side is Side.BUY and carry.trade_id == "B#delivery"
 
 
 def test_intraday_units_come_from_earliest_trades_each_side() -> None:
@@ -46,8 +46,8 @@ def test_intraday_units_come_from_earliest_trades_each_side() -> None:
         trade("SELL", "2024-08-01", 7, 103, trade_id="S1"),
     ])
     assert [(t.trade_id, t.quantity) for t in result.intraday] == [
-        ("B1", dec(5)), ("B2", dec(2)), ("S1", dec(7))]
-    assert [(t.trade_id, t.quantity) for t in result.delivery] == [("B2", dec(3))]
+        ("B1", dec(5)), ("B2#intraday", dec(2)), ("S1", dec(7))]
+    assert [(t.trade_id, t.quantity) for t in result.delivery] == [("B2#delivery", dec(3))]
 
 
 def test_existing_holding_does_not_absorb_intraday_pair() -> None:
@@ -78,10 +78,11 @@ def test_intraday_short_sell_listed_first_matches() -> None:
 def test_net_sell_against_holding_is_delivery() -> None:
     result = classify_trades([
         trade("BUY", "2024-01-01", 20, 100),
-        trade("BUY", "2024-08-01", 5, 110),
-        trade("SELL", "2024-08-01", 15, 112),
+        trade("BUY", "2024-08-01", 5, 110, trade_id="B2"),
+        trade("SELL", "2024-08-01", 15, 112, trade_id="S1"),
     ])
-    assert sum(t.quantity for t in result.intraday) == dec(10)
+    assert [(t.trade_id, t.quantity) for t in result.intraday] == [
+        ("B2", dec(5)), ("S1#intraday", dec(5))]
     [_, carry_sell] = result.delivery
     assert (carry_sell.side, carry_sell.quantity) == (Side.SELL, dec(10))
 
@@ -92,3 +93,57 @@ def test_different_scrips_same_day_are_not_netted() -> None:
         trade("SELL", "2024-08-01", 10, 100, instrument="B"),
     ])
     assert result.intraday == ()
+
+
+def test_no_intraday_means_no_warning() -> None:
+    assert classify_trades([trade("BUY", "2024-01-01", 1, 1)]).warnings == ()
+
+
+def test_intraday_surfaces_unverified_warning() -> None:
+    result = classify_trades([trade("BUY", "2024-08-01", 1, 1), trade("SELL", "2024-08-01", 1, 2)])
+    [warning] = result.warnings
+    assert "UNVERIFIED" in warning and "Q-004" in warning
+
+
+def test_split_pieces_have_unique_ids_and_conserve_uneven_amounts() -> None:
+    result = classify_trades([
+        trade("BUY", "2024-08-01", 3, 100, charges=1, stt=1, trade_id="B"),
+        trade("SELL", "2024-08-01", 1, 101, trade_id="S"),
+    ])
+    pieces = result.intraday + result.delivery
+    ids = [t.trade_id for t in pieces]
+    assert len(ids) == len(set(ids))
+    buys = [t for t in pieces if t.side is Side.BUY]
+    assert sum(t.quantity for t in buys) == dec(3)
+    assert sum(t.charges for t in buys) == dec(1)
+    assert sum(t.stt for t in buys) == dec(1)
+
+
+def test_days_are_netted_separately() -> None:
+    result = classify_trades([
+        trade("BUY", "2024-08-01", 10, 100),
+        trade("SELL", "2024-08-02", 10, 101),
+    ])
+    assert result.intraday == ()
+
+
+def test_buy_sell_buy_same_day_last_buy_is_delivery() -> None:
+    result = classify_trades([
+        trade("BUY", "2024-08-01", 5, 100, trade_id="B1"),
+        trade("SELL", "2024-08-01", 5, 101, trade_id="S1"),
+        trade("BUY", "2024-08-01", 5, 102, trade_id="B2"),
+    ])
+    assert [t.trade_id for t in result.intraday] == ["B1", "S1"]
+    assert [t.trade_id for t in result.delivery] == ["B2"]
+
+
+def test_intraday_short_against_existing_holding_keeps_holding() -> None:
+    result = classify_trades([
+        trade("BUY", "2022-01-01", 100, 50, trade_id="OLD"),
+        trade("SELL", "2024-08-01", 50, 100, trade_id="S"),
+        trade("BUY", "2024-08-01", 50, 99, trade_id="B"),
+    ])
+    delivery = match_fifo(result.delivery)
+    [lot] = delivery.open_lots
+    assert (lot.source_trade_id, lot.quantity) == ("OLD", dec(100))
+    assert not delivery.disposals

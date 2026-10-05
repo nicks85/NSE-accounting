@@ -77,3 +77,4 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   grandfathered cost is overstated. Bonus shares allotted before 1-Feb-2018 also need an FMV.
 - **Needed:** track a cumulative split factor per lot (or per-share FMV on the lot) when
   grandfathering is implemented; confirm treatment with a citation.
+- **Status:** open.

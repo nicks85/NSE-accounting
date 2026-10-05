@@ -23,7 +23,9 @@ from datetime import date
 from engine.models import Segment, Side, Trade
 from engine.money import ZERO
 
-UNVERIFIED_INTRADAY_NETTING = True
+UNVERIFIED_INTRADAY_NETTING = True  # surfaced as a warning whenever intraday is found
+INTRADAY_SUFFIX = "#intraday"
+DELIVERY_SUFFIX = "#delivery"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +36,7 @@ class ClassifiedTrades:
     """Cash-equity trades (or parts) squared off the same day: speculative business."""
     fno: tuple[Trade, ...]
     """Exchange-traded derivatives: non-speculative business."""
+    warnings: tuple[str, ...] = ()
 
 
 def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
@@ -59,9 +62,19 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
             if take == 0:
                 delivery.append(trade)
                 continue
-            head, rest = trade.split(take)
+            if take == trade.quantity:
+                intraday.append(trade)
+                continue
+            head, rest = trade.split(take, INTRADAY_SUFFIX, DELIVERY_SUFFIX)
             intraday.append(head)
-            if rest is not None:
+            if rest is not None:  # pragma: no branch - take < quantity here
                 delivery.append(rest)
 
-    return ClassifiedTrades(tuple(delivery), tuple(intraday), tuple(fno))
+    warnings: tuple[str, ...] = ()
+    if intraday:
+        days = len({(t.instrument, t.trade_date) for t in intraday})
+        warnings = (
+            f"Intraday trades on {days} scrip-day(s) were classified using an UNVERIFIED "
+            "same-day netting convention, see docs/OPEN_QUESTIONS.md Q-004",
+        )
+    return ClassifiedTrades(tuple(delivery), tuple(intraday), tuple(fno), warnings)
