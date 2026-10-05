@@ -93,9 +93,13 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 ## Q-008 — Order of set-off between rate buckets
 
 - **Area:** `engine/rules/setoff.py`.
-- **Best guess implemented:** losses are set off against the highest-rate gains first;
-  short-term losses go against STCG before LTCG; brought-forward losses oldest first, and LTCL
-  before STCL.
+- **Best guess implemented:** losses are set off against slab-rate gains first (treated as the
+  highest rate, up to 30%+), then the highest special rate; at equal rates, gains outside the
+  ₹1.25 lakh exemption before exemption-eligible LTCG. Short-term losses go against STCG
+  before LTCG; brought-forward losses oldest first, and LTCL before STCL. Losses are not netted
+  inside their own bucket first, so the order applies to them too.
+- **Caveat:** if the taxpayer's slab rate is below 20% (e.g. income covered by the rebate),
+  setting losses against slab-rate gains first can increase tax.
 - **Problem:** the Act says which gains a loss may be set off against, not the order between
   eligible buckets. The ITR utility may apply its own order.
 - **Status:** open (best guess, flagged in output).
@@ -223,4 +227,59 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   warned about. Integer cells are kept digit-for-digit; other numbers are rounded to 15
   significant digits.
 - **Needed:** a real protected Groww XLSX and an XLSX export from Zerodha or Upstox.
+- **Status:** open.
+
+## Q-019 — Mutual fund classification
+
+- **Area:** `engine/classify/funds.py`, `compute_tax_year(fund_classes=...)`.
+- **Implemented as:** each fund's class (equity-oriented / specified / other) is supplied per
+  ISIN. Without a class a fund is treated as "other" and flagged. Importers may pre-fill a class
+  from the scheme name; that guess is flagged UNVERIFIED and should be confirmed by the user.
+- **Law:** equity-oriented fund — 2025 Act s.198(8) (65% in domestic listed equity; 90%/90% for
+  a fund of funds). Specified fund — 2025 Act s.76(5)(b): more than 65% in debt and money
+  market instruments. The 1961 Act definition (s.50AA) was "not more than 35% in equity shares
+  of domestic companies" for FY 2023-24 and FY 2024-25 and was changed to the 65%-debt test from
+  FY 2025-26 (Finance (No. 2) Act 2024); the class supplied must match the year (not yet
+  checked against an official 1961 text). `compute_tax_years(fund_classes_by_year=...)` lets
+  the class differ by year; a "specified" class used for a year before FY 2025-26 is flagged.
+  `unclassified_funds()` lists funds still needing a class.
+- **Status:** open (data input + 1961 text).
+
+## Q-020 — FIFO for fund units: per folio or per scheme
+
+- **Area:** CAS importer (instrument = ISIN#FOLIO).
+- **Best guess implemented:** units are matched first-in-first-out within each folio. s.67(7)(c)
+  prescribes FIFO for securities held in demat form; for statement-held (non-demat) units the Act
+  is silent and practice is FIFO within the folio.
+- **Status:** open.
+
+## Q-021 — Non-equity fund redemptions before 23-Jul-2024
+
+- **Area:** `engine/classify/capital_gains.py` (`manual` lines).
+- **Implemented as:** before 23-Jul-2024 such units needed 36 months for long-term and LTCG was
+  taxed at 20% with indexation (cost inflation index). Redemptions held up to 36 months are
+  short-term at slab rates as usual; those held longer are flagged and excluded from the totals
+  rather than guess the index values.
+- **Needed:** official CII notification values to implement it (FY 2024-25 only).
+- **Status:** open.
+
+## Q-023 — Corporate actions on fund units
+
+- **Area:** `engine/matching/fifo.py` (`apply_action`).
+- **Implemented as:** splits, bonus units and scheme mergers/consolidations on fund ISINs are
+  ignored with a warning. A later redemption can then fail as an oversell or give a wrong gain.
+  Scheme consolidation keeps the original holding period (2025 Act s.2(101)(c)(B)(VII)) and
+  isn't a transfer; CAS scheme mergers are imported as sale + purchase (Q-022).
+- **Status:** open.
+
+## Q-024 — Exchange-traded non-equity fund units (gold, debt, international ETFs)
+
+- **Area:** `engine/classify/capital_gains.py`.
+- **Implemented as:** any instrument whose ISIN starts with INF (fund units) goes through the
+  fund rules even when bought on an exchange; without a class it is treated as "other" and
+  flagged. Listed non-equity units use the 24-month period like unlisted ones.
+- **Problem:** 1961 Act s.2(42A) (after Finance (No. 2) Act 2024) gives 12 months only to
+  listed securities "other than a unit"; the 2025 Act s.2(101)(b)(i) says "security listed"
+  without that carve-out. Whether listed units get 12 or 24 months under the 2025 Act needs
+  confirmation.
 - **Status:** open.

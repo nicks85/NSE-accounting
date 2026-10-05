@@ -15,11 +15,13 @@ Order of operations (each step cites its rule in ``engine/rules/common.py``):
 5. LTCG exemption (₹1.25 lakh) on what remains — s.198(2)(a) / s.112A.
 6. Unabsorbed losses are carried forward (subject to filing the return on time, Q-011).
 
-Within each step, losses are set off against the highest-rate gains first. The Act leaves the
-choice to the taxpayer, and this order minimises tax in nearly all cases. UNVERIFIED (Q-008).
+Within each step, losses are set off against the highest-rate gains first, treating slab-rate
+gains as the highest and, at equal rates, gains outside the ₹1.25 lakh exemption before
+exemption-eligible LTCG. The Act leaves the choice to the taxpayer; this order minimises tax
+in most cases but not all (e.g. a low slab rate). UNVERIFIED (Q-008).
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -72,7 +74,9 @@ class SetOffResult:
     """True when a loss could go to more than one bucket and the Q-008 order decided it."""
 
     def tax(self) -> Decimal:
-        return sum((amount * bucket.rate for bucket, amount in self.gains.items()), ZERO)
+        """Tax at the special rates; slab-rate buckets are reported but not taxed here."""
+        return sum((amount * bucket.rate for bucket, amount in self.gains.items()
+                    if bucket.rate is not None), ZERO)
 
 
 SPECULATIVE_LABEL = "Speculative income"
@@ -96,7 +100,7 @@ class _Pools:
 
     def by_rate(self, term: Term | None) -> list[Bucket]:
         buckets = [b for b in self.gains if term is None or b.term is term]
-        return sorted(buckets, key=lambda b: (-b.rate, b.term))
+        return sorted(buckets, key=lambda b: b.sort_key)
 
     def against_gains(
         self, amount: Decimal, targets: list[Bucket], loss: str, citation: Citation
@@ -125,18 +129,22 @@ class _Pools:
 
 def set_off(
     pack: RulePack,
-    bucket_nets: dict[Bucket, Decimal],
+    gains: Mapping[Bucket, Decimal],
+    losses: Mapping[Term, Decimal],
     speculative: Decimal,
     business: Decimal,
     brought_forward: Iterable[LossEntry] = (),
 ) -> SetOffResult:
+    """``gains`` are the positive gains per bucket and ``losses`` the capital losses per term
+    (as positive amounts), kept apart so a loss isn't absorbed by gains in its own bucket before
+    the set-off order is applied (e.g. against exemption-eligible LTCG)."""
     year = pack.start_year
-    pools = _Pools({b: max(n, ZERO) for b, n in bucket_nets.items()}, speculative, business)
+    pools = _Pools({b: g for b, g in gains.items() if g > 0}, speculative, business)
     any_gain = pools.by_rate(None)
     st_then_lt = pools.by_rate(Term.SHORT) + pools.by_rate(Term.LONG)
     long_only = pools.by_rate(Term.LONG)
-    stcl = -sum((n for b, n in bucket_nets.items() if n < 0 and b.term is Term.SHORT), ZERO)
-    ltcl = -sum((n for b, n in bucket_nets.items() if n < 0 and b.term is Term.LONG), ZERO)
+    stcl = losses.get(Term.SHORT, ZERO)
+    ltcl = losses.get(Term.LONG, ZERO)
 
     # 1. Current-year capital losses.
     ltcl = pools.against_gains(ltcl, long_only, "Current-year LTCL", common.SETOFF_CAPITAL)
@@ -183,7 +191,7 @@ def set_off(
     # 5. LTCG exemption.
     exemption_left = pack.ltcg_exemption
     exemption_used: dict[Bucket, Decimal] = {}
-    for bucket in long_only:
+    for bucket in (b for b in long_only if b.exemption_eligible):
         take = min(exemption_left, pools.gains[bucket])
         if take > 0:
             pools.gains[bucket] -= take

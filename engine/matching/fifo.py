@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
+from engine.classify.funds import is_fund
 from engine.dates import add_months
 from engine.matching.corporate_actions import (
     BONUS_PREFIX,
@@ -32,7 +33,7 @@ from engine.models import Disposal, Lot, Segment, Side, Trade
 
 
 class InsufficientHoldingsError(ValueError):
-    """A cash-equity sell exceeds the quantity held (short delivery is not possible)."""
+    """A cash-equity or fund sell exceeds the quantity held (short delivery is not possible)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +107,7 @@ class FifoBook:
     def _apply(self, trade: Trade) -> None:
         is_buy = trade.side is Side.BUY
         queue = self.lots(trade.instrument)
-        if not is_buy and trade.segment is Segment.EQUITY and not self._allow_short:
+        if not is_buy and trade.segment is not Segment.FNO and not self._allow_short:
             held = sum((lot.quantity for lot in queue if lot.is_long), Decimal(0))
             if held < trade.quantity:  # checked up front so a failed sell leaves the book intact
                 raise InsufficientHoldingsError(
@@ -142,6 +143,13 @@ class FifoBook:
         )
 
     def apply_action(self, action: CorporateAction) -> None:
+        if is_fund(action.instrument):
+            self._warnings.append(
+                f"{action.instrument}: {type(action).__name__.lower()} on {action.ex_date} "
+                "ignored: corporate actions on fund units (splits, bonus, scheme mergers) "
+                "aren't supported yet (docs/OPEN_QUESTIONS.md Q-023)"
+            )
+            return
         queue = self.lots(action.instrument)
         if isinstance(action, Split):
             lots, warnings = apply_split(list(queue), action)
@@ -213,6 +221,7 @@ def _disposal(lot: Lot, closing: Trade) -> Disposal:
         open_trade_id=lot.source_trade_id,
         close_trade_id=closing.trade_id,
         split_factor=lot.split_factor,
+        segment=lot.segment,
     )
 
 

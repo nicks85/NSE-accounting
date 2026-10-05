@@ -51,6 +51,8 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
     for trade in trades:
         if trade.segment is Segment.FNO:
             fno.append(trade)
+        elif trade.segment is Segment.MUTUAL_FUND:
+            delivery.append(trade)  # bought from / redeemed with the fund: never intraday
         else:
             groups.setdefault((trade.instrument, trade.trade_date), []).append(trade)
 

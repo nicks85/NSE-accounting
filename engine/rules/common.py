@@ -21,6 +21,34 @@ GRANDFATHERING = Citation(
 GRANDFATHERING_AFTER_SPLIT = Citation(
     "31-Jan-2018 FMV divided by later split/consolidation ratios",
     "s.55(2)(ac)", "s.90(7), s.90(8)(b)", ACT_2025_URL, unverified=True, question="Q-006")
+EQUITY_FUND = Citation(
+    "Equity-oriented fund units taxed like listed shares (12 months, special rates)",
+    "s.111A, s.112A", "s.196, s.198, s.198(8)", ACT_2025_URL)
+SPECIFIED_FUND = Citation(
+    "Specified (debt) fund units bought on or after 1-Apr-2023: always short-term, slab rate",
+    "s.50AA", "s.76", ACT_2025_URL)
+UNLISTED_HOLDING = Citation(
+    "Non-equity fund units are long-term only if held for more than 24 months",
+    "s.2(42A)", "s.2(101)(a)", ACT_2025_URL)
+OTHER_LTCG = Citation(
+    "Other long-term capital gains at 12.5% without indexation (no ₹1.25 lakh exemption)",
+    "s.112", "s.197(1)", ACT_2025_URL)
+SLAB_STCG = Citation(
+    "Other short-term capital gains are taxed at the normal slab rates", None, None,
+    ACT_2025_URL)
+FUND_CLASS = Citation(
+    "Fund class taken from the user's classification (or a name-based guess)", None,
+    "s.76, s.198", ACT_2025_URL, unverified=True, question="Q-019")
+FUND_FIFO_PER_FOLIO = Citation(
+    "Fund units matched first-in-first-out within each folio", None, None, ACT_2025_URL,
+    unverified=True, question="Q-020")
+LISTED_FUND_UNITS = Citation(
+    "Exchange-traded non-equity fund units treated like unlisted units (24 months)",
+    "s.2(42A)", "s.2(101)(a),(b)", ACT_2025_URL, unverified=True, question="Q-024")
+SPECIFIED_DEFINITION_1961 = Citation(
+    "Before FY 2025-26 a 'specified mutual fund' meant one with at most 35% in domestic "
+    "equity; check the class supplied", "s.50AA", None, ACT_2025_URL, unverified=True,
+    question="Q-019")
 STCG_EQUITY = Citation("STCG on STT-paid equity", "s.111A", "s.196", CBDT_CG_FAQ_URL)
 LTCG_EQUITY = Citation(
     "LTCG on STT-paid equity above the exemption", "s.112A", "s.198", CBDT_CG_FAQ_URL)
@@ -45,7 +73,8 @@ SETOFF_INTER_HEAD = Citation(
     "Business loss against other heads (not salary); capital loss not against other heads",
     "s.71", "s.109", ACT_2025_URL)
 SETOFF_ORDER = Citation(
-    "Losses set off against the highest-rate gains first", None, None, ACT_2025_URL,
+    "Losses set off against slab-rate gains first, then the highest special rate, non-exempt "
+    "before exemption-eligible LTCG", None, None, ACT_2025_URL,
     unverified=True, question="Q-008")
 INTER_HEAD_AGAINST_CG = Citation(
     "Unabsorbed F&O loss set off against this year's capital gains", "s.71", "s.109",
@@ -80,7 +109,10 @@ COMMON = {
     c.topic: c
     for c in (
         HOLDING_PERIOD, HOLDING_BOUNDARY, FIFO, COMPUTATION, GRANDFATHERING,
-        GRANDFATHERING_AFTER_SPLIT, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION, SETOFF_SAME_HEAD,
+        GRANDFATHERING_AFTER_SPLIT, EQUITY_FUND, SPECIFIED_FUND, UNLISTED_HOLDING, OTHER_LTCG,
+        SLAB_STCG, FUND_CLASS, FUND_FIFO_PER_FOLIO, LISTED_FUND_UNITS,
+        SPECIFIED_DEFINITION_1961, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION,
+        SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,
         CARRY_SPECULATIVE, RETURN_OF_LOSS, BONUS_STRIPPING, BONUS_STRIPPING_WINDOW,
