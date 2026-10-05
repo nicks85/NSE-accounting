@@ -95,9 +95,12 @@ def test_missing_sheet_part_and_bad_shared_string() -> None:
     sheet = '<worksheet><sheetData><row><c t="s"><v>7</v></c></row></sheetData></worksheet>'
     with pytest.raises(ImportFormatError, match="shared-string"):
         read_xlsx(_zip({**base, "xl/worksheets/s.xml": sheet}))
-    plain = ('<worksheet><sheetData><row><c><v>abc</v></c><c t="str"><v>f</v></c>'
-             '<c r="?"/></row></sheetData></worksheet>')
+    plain = ('<worksheet><sheetData><row><c><v>abc</v></c><c t="str"><v>f</v></c><c/></row>'
+             "</sheetData></worksheet>")
     assert read_xlsx(_zip({**base, "xl/worksheets/s.xml": plain})) == [["abc", "f", ""]]
+    bad_ref = '<worksheet><sheetData><row><c r="?"/></row></sheetData></worksheet>'
+    with pytest.raises(ImportFormatError, match="bad cell reference"):
+        read_xlsx(_zip({**base, "xl/worksheets/s.xml": bad_ref}))
 
 
 def test_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,3 +179,136 @@ def test_remaining_edge_paths() -> None:
     data = _zip({"xl/workbook.xml": workbook, "xl/_rels/workbook.xml.rels": rels,
                  "xl/worksheets/s.xml": sheet})
     assert read_xlsx(data) == [["INF"]]
+
+
+
+WORKBOOK = ('<workbook><sheets><sheet name="a" xmlns:r="urn:r" r:id="r1"/></sheets></workbook>')
+RELS = '<Relationships><Relationship Id="r1" Target="worksheets/s.xml"/></Relationships>'
+
+
+def _book(sheet_xml: str | bytes, **extra: str) -> bytes:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        z.writestr("xl/workbook.xml", extra.pop("workbook", WORKBOOK))
+        z.writestr("xl/_rels/workbook.xml.rels", RELS)
+        z.writestr("xl/worksheets/s.xml", sheet_xml)
+        for name, body in extra.items():
+            z.writestr(name.replace("__", "/"), body)
+    return out.getvalue()
+
+
+def _sheet(cells: str) -> str:
+    return f"<worksheet><sheetData>{cells}</sheetData></worksheet>"
+
+
+def test_long_integer_ids_kept_exactly() -> None:
+    rows = read_xlsx(_book(_sheet(
+        "<row><c><v>1300000012345678</v></c><c><v>1300000012345679</v></c>"
+        "<c><v>1234567890123456789</v></c><c><v>+7</v></c></row>")))
+    assert rows == [["1300000012345678", "1300000012345679", "1234567890123456789", "7"]]
+
+
+def test_phonetic_text_not_included() -> None:
+    shared = ('<sst><si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh></si>'
+              "<si><r><t>Rich </t></r><r><t>text</t></r></si></sst>")
+    inline = ('<c t="inlineStr"><is><t>A</t><rPh><t>x</t></rPh></is></c>')
+    rows = read_xlsx(_book(_sheet(f'<row><c t="s"><v>0</v></c><c t="s"><v>1</v></c>{inline}'
+                                  "</row>"), **{"xl__sharedStrings.xml": shared}))
+    assert rows == [["東京", "Rich text", "A"]]
+
+
+@pytest.mark.parametrize("sheet_xml", [
+    '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE x [<!ENTITY a "b">]><w>&a;</w>'
+    .encode("utf-16-le"),
+    b'<?xml version="1.0"?><!doctype x><w/>',
+    b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><w>&a;</w>',
+])
+def test_dtd_refused_in_any_encoding(sheet_xml: bytes) -> None:
+    with pytest.raises(ImportFormatError, match=r"DTD|not a readable"):
+        read_xlsx(_book(sheet_xml))
+
+
+@pytest.mark.parametrize(("cells", "message"), [
+    ('<row><c r="ZZZZ1"><v>1</v></c></row>', "beyond column"),
+    ('<row r="3000000"><c><v>1</v></c></row>', "more than 200000 rows"),
+    ('<row><c r="C1"><v>3</v></c><c r="A1"><v>1</v></c></row>', "out of order"),
+    ('<row r="3"><c><v>1</v></c></row><row r="1"><c><v>1</v></c></row>', "out of order"),
+    ('<row r="2"/><row r="2"/>', "repeated"),
+    ('<row r="x"/>', "not a readable Excel file"),
+    ('<row><c s="x"><v>1</v></c></row>', "not a readable Excel file"),
+    ("<row><c><v>1</v></row>", "not a readable Excel file"),
+])
+def test_malformed_sheets(cells: str, message: str) -> None:
+    with pytest.raises(ImportFormatError, match=message):
+        read_xlsx(_book(_sheet(cells)))
+
+
+def test_hidden_first_sheet_errors_and_formulas_warn() -> None:
+    workbook = ('<workbook><sheets><sheet name="h" state="hidden" xmlns:r="urn:r" r:id="r9"/>'
+                '<sheet name="a" xmlns:r="urn:r" r:id="r1"/></sheets></workbook>')
+    sheet = _sheet('<row><c t="e"><v>#N/A</v></c><c><f>A1+1</f></c>'
+                   '<c t="d"><v>2025-05-01</v></c></row>')
+    result = xlsx.read_xlsx_sheet(_book(sheet, workbook=workbook))
+    assert result.rows == [["#N/A", "", "2025-05-01"]]
+    assert any("hidden sheet" in w for w in result.warnings)
+    assert any("formula" in w for w in result.warnings)
+    assert any("#N/A" in w for w in result.warnings)
+
+
+def test_date_edge_cases() -> None:
+    styles = ('<styleSheet><numFmts><numFmt numFmtId="170" formatCode="[h]:mm"/></numFmts>'
+              '<cellXfs><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="170"/>'
+              '<xf numFmtId="22"/></cellXfs></styleSheet>')
+    rows = read_xlsx(_book(_sheet(
+        '<row><c s="1"><v>1</v></c><c s="1"><v>59</v></c><c s="1"><v>61</v></c>'
+        '<c s="2"><v>1.5</v></c><c s="3"><v>45777.99999999</v></c></row>'),
+        **{"xl__styles.xml": styles}))
+    assert rows == [["1900-01-01", "1900-02-28", "1900-03-01", "1.5", "2025-05-01"]]
+    for bad, message in (("60", "29-Feb-1900"), ("-0.5", "negative date serial")):
+        with pytest.raises(ImportFormatError, match=message):
+            read_xlsx(_book(_sheet(f'<row><c s="1"><v>{bad}</v></c></row>'),
+                            **{"xl__styles.xml": styles}))
+
+
+def test_corrupt_zip_and_compression_bomb(monkeypatch: pytest.MonkeyPatch) -> None:
+    good = _book(_sheet("<row><c><v>1</v></c></row>"))
+    corrupt = bytearray(good)
+    start = corrupt.index(b"<row>")
+    corrupt[start:start + 5] = b"<rox>"
+    with pytest.raises(ImportFormatError, match="not a readable Excel file"):
+        read_xlsx(bytes(corrupt))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/workbook.xml", WORKBOOK)
+        z.writestr("big.bin", b"0" * (3 * 1024 * 1024))
+    with pytest.raises(ImportFormatError, match="suspiciously compressed"):
+        read_xlsx(out.getvalue())
+
+
+def test_plain_xls_says_unsupported_not_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    import msoffcrypto
+
+    monkeypatch.setattr(msoffcrypto, "OfficeFile", lambda _: object())
+    with pytest.raises(ImportFormatError, match=r"old \.xls"):
+        read_xlsx(xlsx.OLE_MAGIC)
+
+
+def test_utf16_and_binary_csv() -> None:
+    csv_text = tradebook_csv([Row("SYNTHA", "2025-05-01", "buy", "1", "1")])
+    assert len(load_zerodha_tradebook(csv_text.encode("utf-16")).trades) == 1
+    with pytest.raises(ImportFormatError, match="binary data"):
+        load_zerodha_tradebook(b"abc\x00def")
+    with pytest.raises(ImportFormatError, match=r"weird\.csv: not a readable CSV"):
+        load_zerodha_tradebook(b'"' + b"x" * 200_000 + b'"\n', name="weird.csv")
+
+
+def test_xlsx_warnings_reach_the_import_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importers import tabular
+
+    row = ["SYNTHA", "INE000A01011", "2025-05-01", "NSE", "EQ", "EQ", "buy", "false", "1",
+           "1", "1", "9", ""]
+    monkeypatch.setattr(tabular, "read_xlsx_sheet",
+                        lambda *_, **__: xlsx.Sheet([list(HEADER), row], ("1 formula cell",)))
+    result = load_zerodha_tradebook(xlsx_bytes([["x"]]), name="z.xlsx")
+    assert len(result.trades) == 1
+    assert "z.xlsx: 1 formula cell" in result.warnings

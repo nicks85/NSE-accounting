@@ -218,6 +218,9 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   packages under about 4 KB; such files get a clear "couldn't decrypt" error. Whether real
   Groww files hit this is unknown.
 - **Also:** report footers (totals, disclaimers) below the trades make the import fail with a
-  row error rather than being skipped.
+  row error rather than being skipped. The first visible sheet is read by default (hidden
+  sheets skipped with a warning); Excel error cells and formulas without a saved value are
+  warned about. Integer cells are kept digit-for-digit; other numbers are rounded to 15
+  significant digits.
 - **Needed:** a real protected Groww XLSX and an XLSX export from Zerodha or Upstox.
 - **Status:** open.

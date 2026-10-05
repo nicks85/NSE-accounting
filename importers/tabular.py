@@ -18,7 +18,7 @@ from importers.base import (
     parse_datetime,
     parse_decimal,
 )
-from importers.xlsx import is_xlsx, read_xlsx
+from importers.xlsx import is_xlsx, read_xlsx_sheet
 
 FIELDS = ("trade_date", "side", "quantity", "price", "isin", "symbol", "segment", "exchange",
           "trade_id", "executed_at", "auction", "expiry", "strike", "option_type")
@@ -108,7 +108,24 @@ def _contract(symbol: str, expiry: str, strike: str, option_type: str, *, where:
 
 def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook") -> ImportResult:
     """Parse one CSV export. ``name`` labels warnings and errors."""
-    return parse_rows(list(csv.reader(io.StringIO(text.lstrip("\ufeff")))), profile, name=name)
+    try:
+        rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    except csv.Error as error:
+        raise ImportFormatError(f"{name}: not a readable CSV file ({error})") from None
+    return parse_rows(rows, profile, name=name)
+
+
+def _decode_csv(data: bytes, name: str) -> tuple[str, str | None]:
+    """Text of a CSV file, plus a warning when the encoding had to be guessed."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):  # Excel "Unicode Text" is UTF-16
+        return data.decode("utf-16"), None
+    if b"\x00" in data[:4096]:
+        raise ImportFormatError(f"{name}: binary data, not a CSV or Excel file")
+    try:
+        return data.decode("utf-8-sig"), None
+    except UnicodeDecodeError:
+        text = data.decode("cp1252", errors="replace")
+        return text, f"{name}: not UTF-8; read as Windows-1252, check names and symbols"
 
 
 def load_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradebook",
@@ -116,17 +133,16 @@ def load_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradeboo
     """Parse a CSV or XLSX file's bytes (detected from content, not the file name)."""
     if is_xlsx(data):
         try:
-            rows = read_xlsx(data, password=password, sheet=sheet)
+            book = read_xlsx_sheet(data, password=password, sheet=sheet)
         except ImportFormatError as error:
             raise ImportFormatError(f"{name}: {error}") from None
-        return parse_rows(rows, profile, name=name)
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        result = parse_tradebook(data.decode("cp1252", errors="replace"), profile, name=name)
-        note = f"{name}: not UTF-8; read as Windows-1252, check names and symbols"
-        return replace(result, warnings=(*result.warnings, note))
-    return parse_tradebook(text, profile, name=name)
+        result = parse_rows(book.rows, profile, name=name)
+        notes = tuple(f"{name}: {w}" for w in book.warnings)
+    else:
+        text, note = _decode_csv(data, name)
+        result = parse_tradebook(text, profile, name=name)
+        notes = (note,) if note else ()
+    return replace(result, warnings=(*result.warnings, *notes)) if notes else result
 
 
 def load_tradebooks(files: Iterable[tuple[str, bytes]], profile: BrokerProfile, *,
