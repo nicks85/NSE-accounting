@@ -321,8 +321,12 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   be completed in the official utility.
 - **Best guesses:** s.111A gains go to CG A2 (section code 1A); non-equity fund short-term gains
   to A5 "other assets"; s.112 LTCG on fund units to B "assets not covered elsewhere";
-  Schedule 112A uses one row per ISIN for holdings acquired on or before 31-Jan-2018 and a single
-  CONSOLIDATED row for later ones, with the ISIN used as the name when none is given;
+  Schedule 112A uses one row per lot for holdings acquired on or before 31-Jan-2018 (so each
+  row's "higher of cost and lower of sale value and FMV" holds; the same ISIN may appear on
+  several rows) and a single CONSOLIDATED row (no quantity or per-share price) for later ones,
+  with the ISIN used as the name when none is given; per-share figures are derived from the
+  whole-rupee totals to 4 decimals; Schedule CG items C and E are floored at 0 (schema minimum),
+  losses being carried in the set-off table;
   TotalBalance112A (ITR-2) = Balance112A; amounts are rounded to whole rupees per line.
   The quarter-wise accrual table splits each column's gain left after current-year set-off in
   proportion to that column's net gain per period. Schema-valid JSON may still fail the

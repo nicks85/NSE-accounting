@@ -18,6 +18,7 @@ Assumptions are logged as docs/OPEN_QUESTIONS.md Q-025.
 """
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ from engine.api import TaxYearReport
 from engine.classify.capital_gains import Bucket, CapitalGainLine, Regime, Term
 from engine.classify.funds import isin_of
 from engine.export.json_out import to_json
-from engine.export.schemas_registry import SchemaError, validate
+from engine.export.schemas_registry import SchemaError, load_schema, validate
 from engine.export.skeleton import skeleton
 from engine.money import ZERO
 from engine.notices import Notice
@@ -131,59 +132,89 @@ def _sale_block(base: dict[str, Any], lines: Iterable[CapitalGainLine],
     return block
 
 
+ISIN_PATTERN = re.compile(r"IN[0-9A-Z]{10}")
+PER_UNIT = Decimal("0.0001")
+"""Schema precision for per-share figures (multipleOf 0.0001)."""
+
+
+def _lower_column(form: str, start_year: int) -> str:
+    """Schedule 112A column 9 ("lower of 6 and 11") is named differently in ITR-2 and ITR-3."""
+    columns = load_schema(form, start_year)["definitions"]["Schedule112A115ADType"]["properties"]
+    return "LTCGBeforelower6and11" if "LTCGBeforelower6and11" in columns else "LTCGBeforelowerB1B2"
+
+
+def _row_112a(when: str, isin: str, name: str, lines: list[CapitalGainLine],
+              lower_column: str) -> dict[str, Any]:
+    """One Schedule 112A row whose columns satisfy the form's own arithmetic on whole rupees:
+    7 = higher of 8 and 9, 9 = lower of 6 and 11, 13 = 7 + 12, 14 = 6 - 13."""
+    sale = sum(_rupees(line.disposal.sale_value) for line in lines)
+    actual = sum(_rupees(line.disposal.cost) for line in lines)
+    expenses = sum(_rupees(line.disposal.transfer_expenses) for line in lines)
+    quantity = sum((line.disposal.quantity for line in lines), ZERO)
+    fmv = sum(_rupees(line.grandfathered_fmv or ZERO) for line in lines)
+    lower = min(sale, fmv) if when == "BE" else 0
+    cost = max(actual, lower)
+    row: dict[str, Any] = {"ShareOnOrBefore": when, "ISINCode": isin, "ShareUnitName": name}
+    if when == "BE":  # quantity and per-share prices are meaningless on a consolidated row
+        row["NumSharesUnits"] = quantity.quantize(PER_UNIT)
+        row["SalePricePerShareUnit"] = (Decimal(sale) / quantity).quantize(PER_UNIT)
+    row.update({
+        "TotSaleValue": sale,
+        "CostAcqWithoutIndx": cost,
+        "AcquisitionCost": Decimal(actual),
+        lower_column: lower,
+        "FairMktValuePerShareunit": (Decimal(fmv) / quantity).quantize(PER_UNIT)
+        if when == "BE" else Decimal(0),
+        "TotFairMktValueCapAst": fmv,
+        "ExpExclCnctTransfer": Decimal(expenses),
+        "TotalDeductions": cost + expenses,
+        "Balance": sale - cost - expenses,
+    })
+    return row
+
+
 def schedule_112a(report: TaxYearReport, form: str,
                   names: Mapping[str, str] | None = None) -> tuple[dict[str, Any], list[Notice]]:
+    """Rows: one per lot acquired on or before 31-Jan-2018 ("BE", so each row's grandfathering
+    arithmetic holds), and one CONSOLIDATED row for everything acquired later ("AE")."""
     names = names or {}
     notices: list[Notice] = []
-    groups: dict[tuple[str, str], list[CapitalGainLine]] = defaultdict(list)
+    lower_column = _lower_column(form, report.pack.start_year)
+    before: list[CapitalGainLine] = []
+    after: list[CapitalGainLine] = []
     for line in report.capital_gains:
         if line.manual or not line.bucket.exemption_eligible:
             continue
         isin = isin_of(line.disposal.instrument)
-        if line.disposal.acquired_on <= GRANDFATHERING_CUTOFF:
-            groups[("BE", isin)].append(line)
-        else:
-            groups[("AE", CONSOLIDATED_ISIN)].append(line)
+        if not ISIN_PATTERN.fullmatch(isin):
+            raise ExportError(
+                f"Schedule 112A needs an ISIN; {line.disposal.instrument!r} isn't one")
+        (before if line.disposal.acquired_on <= GRANDFATHERING_CUTOFF else after).append(line)
 
     rows: list[dict[str, Any]] = []
-    for (when, isin), lines in sorted(groups.items()):
-        sale = sum(_rupees(line.disposal.sale_value) for line in lines)
-        actual = sum((line.disposal.cost for line in lines), ZERO)
-        expenses = sum(_rupees(line.disposal.transfer_expenses) for line in lines)
-        quantity = sum((line.disposal.quantity for line in lines), ZERO)
-        fmv = sum((line.grandfathered_fmv or ZERO for line in lines), ZERO)
-        cost = sum(_rupees(line.cost) for line in lines)
-        if when == "BE":
-            name = names.get(isin, isin)[:NAME_LIMIT]
-            if isin not in names:
-                notices.append(Notice("EXPORT", f"Schedule 112A: no name for {isin}; the ISIN "
-                                      "was used as the share/unit name"))
-            lower = min(sale, _rupees(fmv))
-        else:
-            name, lower = CONSOLIDATED_NAME, 0
-        row = {
-            "ShareOnOrBefore": when,
-            "ISINCode": isin,
-            "ShareUnitName": name,
-            "NumSharesUnits": quantity.quantize(Decimal("0.0001")),
-            "SalePricePerShareUnit": (Decimal(sale) / quantity).quantize(Decimal("0.01")),
-            "TotSaleValue": sale,
-            "CostAcqWithoutIndx": cost,
-            "AcquisitionCost": round_rupee(actual),
-            "LTCGBeforelowerB1B2": lower,
-            "FairMktValuePerShareunit": (fmv / quantity).quantize(Decimal("0.01")),
-            "TotFairMktValueCapAst": _rupees(fmv),
-            "ExpExclCnctTransfer": Decimal(expenses),
-            "TotalDeductions": cost + expenses,
-            "Balance": sale - cost - expenses,
-        }
-        rows.append(row)
+    unnamed: set[str] = set()
+    for line in sorted(before, key=lambda ln: (isin_of(ln.disposal.instrument),
+                                               ln.disposal.acquired_on)):
+        isin = isin_of(line.disposal.instrument)
+        if isin not in names:
+            unnamed.add(isin)
+        if line.grandfathered_fmv is None:
+            notices.append(Notice(
+                "EXPORT", f"Schedule 112A: {isin} acquired {line.disposal.acquired_on} has no "
+                "31-Jan-2018 FMV, so the FMV columns are 0 and the actual cost was used",
+                ref=line.disposal.close_trade_id))
+        rows.append(_row_112a("BE", isin, names.get(isin, isin)[:NAME_LIMIT], [line],
+                              lower_column))
+    if after:
+        rows.append(_row_112a("AE", CONSOLIDATED_ISIN, CONSOLIDATED_NAME, after, lower_column))
+    notices += [Notice("EXPORT", f"Schedule 112A: no name for {isin}; the ISIN was used as the "
+                       "share/unit name") for isin in sorted(unnamed)]
 
     schedule = skeleton(form, report.pack.start_year, "Schedule112A")
     schedule["Schedule112ADtls"] = rows
     totals = {
         "SaleValue112A": "TotSaleValue", "CostAcqWithoutIndx112A": "CostAcqWithoutIndx",
-        "AcquisitionCost112A": "AcquisitionCost", "LTCGBeforelowerB1B2112A": "LTCGBeforelowerB1B2",
+        "AcquisitionCost112A": "AcquisitionCost", "LTCGBeforelowerB1B2112A": lower_column,
         "FairMktValueCapAst112A": "TotFairMktValueCapAst",
         "ExpExclCnctTransfer112A": "ExpExclCnctTransfer", "Deductions112A": "TotalDeductions",
         "Balance112A": "Balance",
@@ -284,8 +315,11 @@ def schedule_cg(report: TaxYearReport, form: str, balance_112a: int) -> dict[str
         other_ltcg = block["CapgainonAssets"]
     long["TotalLTCG"] = balance_112a + other_ltcg
 
-    schedule["SumOfCGIncm"] = short["TotalSTCG"] + long["TotalLTCG"]
-    schedule["TotScheduleCGFor23"] = schedule["SumOfCGIncm"] + schedule["IncmFromVDATrnsf"]
+    # C and E are carried forward only when positive (schema minimum 0); losses travel through
+    # the set-off table instead.
+    schedule["SumOfCGIncm"] = max(short["TotalSTCG"] + long["TotalLTCG"], 0)
+    schedule["TotScheduleCGFor23"] = max(schedule["SumOfCGIncm"] + schedule["IncmFromVDATrnsf"],
+                                         0)
 
     nets = {"20Per": equity_stcg, "AppRate": short["SaleOnOtherAssets"]["CapgainonAssets"],
             "12_5Per": long["TotalLTCG"]}

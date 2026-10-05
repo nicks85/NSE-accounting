@@ -43,8 +43,9 @@ def test_mixed_export_is_valid_and_adds_up() -> None:
     out = _written(export)
     rows = out["Schedule112A"]["Schedule112ADtls"]
     assert [(r["ShareOnOrBefore"], r["ISINCode"], r["Balance"]) for r in rows] == [
-        ("AE", "INNOTREQUIRD", 100000), ("BE", A, 700000)]
-    assert rows[1]["CostAcqWithoutIndx"] == 800000 and rows[1]["AcquisitionCost"] == 500000
+        ("BE", A, 700000), ("AE", "INNOTREQUIRD", 100000)]
+    assert rows[0]["CostAcqWithoutIndx"] == 800000 and rows[0]["AcquisitionCost"] == 500000
+    assert "NumSharesUnits" not in rows[1]
     assert out["Schedule112A"]["Balance112A"] == 800000
     cg = out["ScheduleCGFor23"]
     assert cg["ShortTermCapGainFor23"]["TotalSTCG"] == 29000
@@ -207,3 +208,102 @@ def test_remote_ref_is_never_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
     validator = _Validator({"$ref": "https://example.invalid/schema.json"}, registry=Registry())
     with pytest.raises(Unresolvable):
         validator.validate(1)
+
+
+
+def _check_against_engine(report, export) -> None:  # type: ignore[no-untyped-def]
+    """Per column: accrual periods add up to the gain left after set-off."""
+    cg = export.schedules["ScheduleCGFor23"]
+    for column, key in itr.ACCRUAL_FIELD.items():
+        left = cg["CurrYrLosses"][itr._row_key(column)]["CurrYrCapGain"]
+        assert sum(cg["AccruOrRecOfCG"][key]["DateRange"].values()) == left
+
+
+def test_itr3_with_112a_and_business_income() -> None:
+    """QA case: ITR-3 names column 9 LTCGBeforelower6and11."""
+    report = compute_tax_year(2025, [
+        buy("2015-01-01", 10, 100), sell("2025-06-01", 10, 300),
+        fut("BUY", "2025-06-02", 50, 100), fut("SELL", "2025-06-05", 50, 110),
+    ], fmv_2018={A: d(150)})
+    export = export_itr(report, names={A: "SYNTHETIC A LTD"})
+    assert export.form == "ITR-3" and export.valid, export.errors
+    row = export.schedules["Schedule112A"]["Schedule112ADtls"][0]
+    assert row["LTCGBeforelower6and11"] == 1500 and "LTCGBeforelowerB1B2" not in row
+    _check_against_engine(report, export)
+
+
+def test_all_loss_year_is_valid() -> None:
+    """QA case: STCL 500 + LTCL 500 → sums floored at 0; losses shown in the set-off table."""
+    report = compute_tax_year(2025, [
+        buy("2025-05-01", 10, 100), sell("2025-06-01", 10, 50),
+        buy("2023-01-01", 10, 100, instrument=C), sell("2025-06-01", 10, 50, instrument=C),
+    ])
+    export = export_itr(report)
+    assert export.valid, export.errors
+    cg = export.schedules["ScheduleCGFor23"]
+    assert (cg["SumOfCGIncm"], cg["TotScheduleCGFor23"]) == (0, 0)
+    assert cg["CurrYrLosses"]["LossRemainSetOff"]["StclSetoff20Per"] == 500
+    assert cg["CurrYrLosses"]["LossRemainSetOff"]["LtclSetOff12_5Per"] == 500
+    assert cg["LongTermCapGain23"]["SaleOfEquityShareUs112A"]["BalanceCG"] == -500
+
+
+def test_mixed_fmv_lots_get_consistent_rows() -> None:
+    """QA case: lots at 100 and 200, FMV 150, sold at 300 (10 each). Per-lot rows:
+    lot 1 cost max(1000, min(3000, 1500)) = 1500; lot 2 cost max(2000, 1500) = 2000."""
+    report = compute_tax_year(2025, [
+        buy("2015-01-01", 10, 100), buy("2016-01-01", 10, 200), sell("2025-06-01", 20, 300),
+    ], fmv_2018={A: d(150)})
+    export = export_itr(report, names={A: "SYNTHETIC A LTD"})
+    assert export.valid, export.errors
+    rows = export.schedules["Schedule112A"]["Schedule112ADtls"]
+    for row in rows:
+        lower = min(row["TotSaleValue"], row["TotFairMktValueCapAst"])
+        assert row["LTCGBeforelowerB1B2"] == lower
+        assert row["CostAcqWithoutIndx"] == max(int(row["AcquisitionCost"]), lower)
+    assert [r["CostAcqWithoutIndx"] for r in rows] == [1500, 2000]
+    assert sum(r["Balance"] for r in rows) == sum(ln.gain for ln in report.capital_gains)
+    _check_against_engine(report, export)
+
+
+def test_per_share_precision_and_split_adjusted_fmv() -> None:
+    """3 shares at 333.33: sale 999.99 → Rs 1,000 in the schedule, so the per-share price is
+    1000/3 = 333.3333 (4 dp, consistent with column 6). A 1:3 split after 2018 divides the FMV:
+    FMV 150/share before split → 50/share now."""
+    from engine.matching.corporate_actions import Split
+
+    report = compute_tax_year(2025, [buy("2015-01-01", 1, 100), sell("2025-06-01", 3, "333.33")],
+                              actions=[Split(A, day("2020-01-01"), old=1, new=3)],
+                              fmv_2018={A: d(150)})
+    export = export_itr(report, names={A: "SYNTHETIC A LTD"})
+    assert export.valid, export.errors
+    row = export.schedules["Schedule112A"]["Schedule112ADtls"][0]
+    assert row["SalePricePerShareUnit"] == Decimal("333.3333")
+    assert row["FairMktValuePerShareunit"] == Decimal("50.0000")
+
+
+def test_missing_fmv_and_non_isin_are_flagged() -> None:
+    report = compute_tax_year(2025, [buy("2015-01-01", 10, 100), sell("2025-06-01", 10, 300)])
+    export = export_itr(report, names={A: "SYNTHETIC A LTD"})
+    assert any("has no 31-Jan-2018 FMV" in n.message for n in export.warnings)
+    odd = compute_tax_year(2025, [buy("2023-01-01", 1, 1, instrument="RELIANCE"),
+                                  sell("2025-06-01", 1, 2, instrument="RELIANCE")])
+    with pytest.raises(ExportError, match="needs an ISIN"):
+        export_itr(odd)
+
+
+def test_empty_report_and_slab_loss_absorbed_across_columns() -> None:
+    """Empty year exports validly. Slab-rate STCL 3,000 vs STCG 20% 1,000 then LTCG 12.5%
+    5,000 → 0 and 3,000 left."""
+    assert export_itr(compute_tax_year(2025, [])).valid
+    report = compute_tax_year(2025, [
+        mf("BUY", "2025-04-10", 1000, 10, DEBT_FUND), mf("SELL", "2025-06-10", 1000, 7, DEBT_FUND),
+        buy("2025-04-10", 10, 100), sell("2025-06-10", 10, 200),
+        buy("2023-01-01", 10, 100, instrument=C), sell("2025-06-10", 10, 600, instrument=C),
+    ], fund_classes=CLASSES)
+    export = export_itr(report)
+    assert export.valid, export.errors
+    losses = export.schedules["ScheduleCGFor23"]["CurrYrLosses"]
+    assert losses["InStcg20Per"]["CurrYrCapGain"] == 0
+    assert losses["InLtcg12_5Per"]["StclSetoffAppRate"] == 2000
+    assert losses["InLtcg12_5Per"]["CurrYrCapGain"] == 3000
+    _check_against_engine(report, export)
