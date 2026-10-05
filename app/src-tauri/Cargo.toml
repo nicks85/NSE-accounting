@@ -1,0 +1,17 @@
+[package]
+name = "kosh"
+version = "0.0.1"
+description = "Offline Indian share-market tax calculator"
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+[lib]
+name = "kosh_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# No HTTP plugin and no updater plugin: the app must make zero network calls.
+tauri = { version = "2", features = [] }
