@@ -56,17 +56,17 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Needed:** CBDT circular / ruling or CA confirmation.
 - **Status:** open.
 
-## Q-005 — Bonus stripping not implemented
+## Q-005 — Bonus stripping: 1961 Act text
 
-- **Area:** corporate actions / capital-gains computation.
-- **Rule (verified, 2025 Act s.175(9),(10)):** if securities or units are bought within 3
-  months before the record date, bonus securities/units are allotted on them, and the original
-  ones are sold within 9 months after the record date while the bonus ones are kept, the loss on
-  the original ones is ignored and becomes the cost of the bonus ones still held. 1961 Act
-  equivalent s.94(8) (extension to securities by Finance Act 2022 not yet checked against an
-  official 1961 text, see Q-001).
-- **Implemented as:** not implemented. Losses on such sales would be overstated.
-- **Status:** open; must be implemented before the capital-gains computation ships.
+- **Area:** `engine/matching/fifo.py` (`FifoBook._strip_bonus`).
+- **Implemented:** 2025 Act s.175(9),(10), verified against `docs/sources/`: a loss on
+  securities bought within 3 months before the record date and sold within 9 months after it is
+  ignored if bonus securities are still held after the sale, and becomes the cost of those
+  bonus securities.
+- **Open:** for FY 2024-25 and FY 2025-26 the same rule is applied under 1961 Act s.94(8).
+  That Finance Act 2022 extended s.94(8) from units to securities is not yet checked against an
+  official 1961 text, so it's flagged UNVERIFIED in those years.
+- **Status:** open (1961 text only).
 
 ## Q-006 — 31-Jan-2018 FMV after a split or bonus
 
@@ -145,4 +145,17 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   long-term). Dates that don't exist are clamped (29-Feb → 28-Feb).
 - **Basis:** s.2(101)(a),(b) "held for not more than twelve months immediately preceding the
   date of its transfer"; exact day-counting convention not stated.
+- **Status:** open.
+
+## Q-014 — Bonus-stripping window boundaries
+
+- **Area:** `engine/matching/fifo.py` (`FifoBook._strip_bonus`).
+- **Best guess implemented:** "within three months before the record date" = bought on or
+  after the same date 3 months earlier and before the record date; "within nine months after" =
+  sold after the record date and on or before the same date 9 months later. Record date
+  defaults to the ex-date (T+1). Shares bought on or after the ex-date are not entitled, so
+  they are excluded. The bonus shares must be allotted on or before the sale date to count as
+  "held". The loss is worked out per FIFO lot, not netted across all clause-(a) securities.
+  The ignored loss includes trade charges. If several bonus lots qualify, the first bonus (by
+  ex-date) takes the loss. Bonus shares supplied only as opening lots can't be checked (warning).
 - **Status:** open.

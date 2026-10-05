@@ -170,8 +170,10 @@ class Disposal:
     open_trade_id: str
     close_trade_id: str
     split_factor: Decimal = Decimal(1)
+    stripped_loss: Decimal = Decimal(0)
+    """Loss ignored under the bonus-stripping rule (moved into the bonus shares' cost)."""
 
     @property
     def gain(self) -> Decimal:
-        """Gain before any tax-specific adjustment (grandfathering, STT deductibility)."""
-        return self.sale_value - self.transfer_expenses - self.cost
+        """Gain before grandfathering; a bonus-stripped loss is added back (so it is ignored)."""
+        return self.sale_value - self.transfer_expenses - self.cost + self.stripped_loss
