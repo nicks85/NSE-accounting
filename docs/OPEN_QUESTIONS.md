@@ -70,13 +70,13 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 
 ## Q-006 — 31-Jan-2018 FMV after a split or bonus
 
-- **Area:** grandfathering (s.112A / s.55(2)(ac)), to be built in Phase 1.
-- **Problem:** the published 31-Jan-2018 FMV is per pre-split share. After a later split the
-  per-share FMV for grandfathering must be divided by the split ratio, otherwise the
-  grandfathered cost is overstated. Bonus shares allotted before 1-Feb-2018 also need an FMV.
-- **Needed:** track a cumulative split factor per lot (or per-share FMV on the lot) when
-  grandfathering is implemented; confirm treatment with a citation.
-- **Status:** open.
+- **Area:** `engine/classify/capital_gains.py`, `Lot.split_factor`.
+- **Best guess implemented:** each lot tracks the product of split/consolidation ratios with
+  ex-dates after 31-Jan-2018; the published per-share FMV is divided by it. Splits on or before
+  that date don't change it (the published FMV is already post-split). Bonus shares allotted
+  before 1-Feb-2018 use the same per-share FMV. Flagged in output whenever the factor isn't 1.
+- **Needed:** CA confirmation (s.90(8)(b) / s.55(2)(ac) define FMV per asset, silent on splits).
+- **Status:** open (best guess, flagged in output).
 
 ## Q-007 — FY 2024-25: which LTCG portion gets the ₹1.25 lakh exemption
 
@@ -120,13 +120,11 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 
 ## Q-011 — Carry forward requires a timely return
 
-- **Area:** carry-forward ledger.
-- **Rule:** 1961 Act s.80 — losses under s.72, s.73, s.74 carry forward only if the return of
-  loss was filed by the due date. The 2025 Act equivalent was not located in
-  `docs/sources/` yet (s.263-related provisions mention returns of loss).
+- **Rule:** no loss carries forward unless determined in a return filed under s.263(1) —
+  2025 Act s.121 (verified in `docs/sources/`); 1961 Act s.80 (due date, s.139(3)).
 - **Implemented as:** carried-forward losses are listed with a warning; the engine can't know
   whether returns were filed on time.
-- **Status:** open (2025 citation needed).
+- **Status:** open (data, not law: needs a user input per year).
 
 ## Q-012 — Scope of the tax figure
 
@@ -134,7 +132,9 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Implemented as:** tax at the special rates on capital gains only. Not applied: surcharge,
   health and education cess, rebate, and the adjustment where other income is below the basic
   exemption limit (2025 Act s.196(2), s.198(3); 1961 Act s.111A(1) proviso, s.112A(3)).
-  Business income is reported but taxed at slab rates outside Kosh.
+  Business income is reported but taxed at slab rates outside Kosh. Total income is also
+  rounded to ₹10 before tax (s.516 / s.288A); the engine taxes unrounded gains, so its figure
+  can differ from the return by about ₹10.
 - **Status:** open (scope decision for later phases).
 
 ## Q-013 — Holding-period boundary

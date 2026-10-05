@@ -8,6 +8,7 @@ business income → set-off / exemption / carry-forward → special-rate tax.
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
+from types import MappingProxyType
 
 from engine import __version__
 from engine.classify.business_income import BusinessIncome, business_income
@@ -18,6 +19,7 @@ from engine.matching.corporate_actions import CorporateAction
 from engine.matching.fifo import match_fifo
 from engine.models import Disposal, Lot, Trade
 from engine.money import ZERO
+from engine.notices import Notice
 from engine.rules import common, pack_for_year
 from engine.rules.base import Citation, RulePack
 from engine.rules.rounding import round_to_ten
@@ -25,16 +27,19 @@ from engine.rules.setoff import LossEntry, SetOffResult, set_off
 
 __all__ = [
     "LossEntry",
+    "Notice",
     "TaxYearReport",
     "compute_tax_year",
     "compute_tax_years",
     "engine_version",
 ]
 
-ALWAYS_NOTES = (
-    "Special-rate tax only: surcharge, health and education cess, rebate and the "
-    "basic-exemption shortfall adjustment (s.196(2)/s.198(3)) are not applied "
-    "(docs/OPEN_QUESTIONS.md Q-012).",
+SCOPE_NOTE = Notice(
+    "SCOPE",
+    "Special-rate tax on capital gains only: surcharge, cess, rebate, slab tax on business "
+    "income, the basic-exemption shortfall adjustment (s.196(2)/s.198(3)) and rounding of "
+    "total income to ₹10 before tax are not applied.",
+    question="Q-012",
 )
 
 
@@ -47,13 +52,13 @@ def engine_version() -> str:
 class TaxYearReport:
     pack: RulePack
     capital_gains: tuple[CapitalGainLine, ...]
-    bucket_nets: dict[Bucket, Decimal]
+    bucket_nets: Mapping[Bucket, Decimal]
     business: BusinessIncome
     setoff: SetOffResult
     special_rate_tax: Decimal
     special_rate_tax_rounded: Decimal
     open_lots: tuple[Lot, ...]
-    warnings: tuple[str, ...]
+    warnings: tuple[Notice, ...]
     unverified: tuple[Citation, ...] = field(default=())
 
     @property
@@ -88,13 +93,17 @@ def compute_tax_year(
     delivery = match_fifo(classified.delivery, opening_lots, action_list)
     intraday = match_fifo(classified.intraday, allow_short=True)
     fno = match_fifo(classified.fno)
-    warnings = [*classified.warnings, *delivery.warnings, *intraday.warnings, *fno.warnings]
+    warnings = [
+        Notice("ENGINE", message)
+        for message in (*classified.warnings, *delivery.warnings, *intraday.warnings,
+                        *fno.warnings)
+    ]
 
     lines: list[CapitalGainLine] = []
     for disposal in _in_year(delivery.disposals, start_year):
-        line, line_warnings = capital_gain_line(disposal, pack, fmv_2018 or {})
+        line, line_notices = capital_gain_line(disposal, pack, fmv_2018 or {})
         lines.append(line)
-        warnings.extend(line_warnings)
+        warnings.extend(line_notices)
 
     nets: dict[Bucket, Decimal] = {}
     for line in lines:
@@ -106,27 +115,32 @@ def compute_tax_year(
     tax = result.tax()
 
     used: list[Citation] = [c for line in lines for c in line.citations]
+    used += [c for line in business.lines for c in line.citations]
     used += [step.citation for step in result.steps]
     long_term_rates = {b.rate for b in nets if b.term is Term.LONG}
     if result.exemption_used and len(long_term_rates) > 1:  # FY 2024-25 split rates
         used += [c for c in pack.citations.values() if c.question == "Q-007"]
+    if result.order_assumed:
+        used.append(common.SETOFF_ORDER)
     if result.carried_forward:
         used.append(common.RETURN_OF_LOSS)
     unverified = tuple(dict.fromkeys(c for c in used if c.unverified))
     warnings += [
-        f"UNVERIFIED ({c.question}): {c.topic}. See docs/OPEN_QUESTIONS.md." for c in unverified
+        Notice("UNVERIFIED", f"{c.topic} (best guess; see docs/OPEN_QUESTIONS.md "
+               f"{c.question}).", question=c.question)
+        for c in unverified
     ]
-    if result.expired:
-        warnings += [
-            f"{e.kind.value} of {e.origin_year} (₹{e.amount}) has expired and was not used"
-            for e in result.expired
-        ]
-    warnings += ALWAYS_NOTES
+    warnings += [
+        Notice("EXPIRED_LOSS", f"{e.kind.value} of {e.origin_year} (₹{e.amount}) is past its "
+               "carry-forward period and was not used")
+        for e in result.expired
+    ]
+    warnings.append(SCOPE_NOTE)
 
     return TaxYearReport(
         pack=pack,
         capital_gains=tuple(lines),
-        bucket_nets=nets,
+        bucket_nets=MappingProxyType(nets),
         business=business,
         setoff=result,
         special_rate_tax=tax,
@@ -148,9 +162,12 @@ def compute_tax_years(
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next."""
     trade_list, lot_list, action_list = list(trades), list(opening_lots), list(actions)
+    years = sorted(start_years)
+    if years and years != list(range(years[0], years[-1] + 1)):
+        raise ValueError(f"tax years must be consecutive to carry losses forward: {years}")
     carried = list(brought_forward)
     reports = []
-    for year in sorted(start_years):
+    for year in years:
         report = compute_tax_year(year, trade_list, opening_lots=lot_list, actions=action_list,
                                   fmv_2018=fmv_2018, brought_forward=carried)
         reports.append(report)

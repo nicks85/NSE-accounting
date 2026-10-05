@@ -25,7 +25,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from engine.classify.capital_gains import Bucket, Term
-from engine.money import ZERO
+from engine.money import ZERO, require_decimal
 from engine.rules import common
 from engine.rules.base import Citation, RulePack
 
@@ -43,6 +43,11 @@ class LossEntry:
     """Start year of the tax year in which the loss arose."""
     kind: LossKind
     amount: Decimal
+
+    def __post_init__(self) -> None:
+        require_decimal("amount", self.amount)
+        if self.amount <= 0:
+            raise ValueError(f"loss amount must be positive, got {self.amount}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +68,8 @@ class SetOffResult:
     steps: tuple[SetOffStep, ...]
     carried_forward: tuple[LossEntry, ...]
     expired: tuple[LossEntry, ...]
+    order_assumed: bool = False
+    """True when a loss could go to more than one bucket and the Q-008 order decided it."""
 
     def tax(self) -> Decimal:
         return sum((amount * bucket.rate for bucket, amount in self.gains.items()), ZERO)
@@ -85,6 +92,7 @@ class _Pools:
         self.gains = gains
         self.income = {SPECULATIVE_LABEL: speculative, BUSINESS_LABEL: business}
         self.steps: list[SetOffStep] = []
+        self.order_assumed = False
 
     def by_rate(self, term: Term | None) -> list[Bucket]:
         buckets = [b for b in self.gains if term is None or b.term is term]
@@ -93,6 +101,8 @@ class _Pools:
     def against_gains(
         self, amount: Decimal, targets: list[Bucket], loss: str, citation: Citation
     ) -> Decimal:
+        if amount > 0 and sum(1 for b in targets if self.gains[b] > 0) > 1:
+            self.order_assumed = True  # a choice between eligible buckets was made (Q-008)
         for bucket in targets:
             take = min(amount, self.gains[bucket])
             if take > 0:
@@ -137,7 +147,7 @@ def set_off(
         loss = -pools.income[BUSINESS_LABEL]
         pools.income[BUSINESS_LABEL] = ZERO
         loss = pools.against_income(loss, [SPECULATIVE_LABEL], "Current-year F&O loss",
-                                    common.SETOFF_INTER_HEAD)
+                                    common.SETOFF_SAME_HEAD)
         loss = pools.against_gains(loss, any_gain, "Current-year F&O loss",
                                    common.INTER_HEAD_AGAINST_CG)
         pools.income[BUSINESS_LABEL] = -loss
@@ -145,10 +155,14 @@ def set_off(
     # 4. Brought-forward losses.
     carried: list[LossEntry] = []
     expired: list[LossEntry] = []
-    kinds = (LossKind.BUSINESS, LossKind.SPECULATIVE, LossKind.LONG_TERM_CAPITAL,
+    # Speculative before business: a b/f business loss may also absorb speculative income,
+    # so it must not use up income that only a (shorter-lived) speculative loss can use.
+    kinds = (LossKind.SPECULATIVE, LossKind.BUSINESS, LossKind.LONG_TERM_CAPITAL,
              LossKind.SHORT_TERM_CAPITAL)
     entries = sorted(brought_forward, key=lambda e: (kinds.index(e.kind), e.origin_year))
     for entry in entries:
+        if entry.origin_year >= year:
+            raise ValueError(f"brought-forward loss from {entry.origin_year} is not before {year}")
         if year - entry.origin_year > carry_years(pack, entry.kind):
             expired.append(entry)
             continue
@@ -175,6 +189,8 @@ def set_off(
             pools.gains[bucket] -= take
             exemption_left -= take
             exemption_used[bucket] = take
+            pools.steps.append(SetOffStep("LTCG exemption", bucket.label, take,
+                                          common.LTCG_EXEMPTION))
 
     # 6. Current-year losses to carry forward.
     for kind, amount in (
@@ -194,4 +210,5 @@ def set_off(
         steps=tuple(pools.steps),
         carried_forward=tuple(sorted(carried, key=lambda e: (e.origin_year, kinds.index(e.kind)))),
         expired=tuple(expired),
+        order_assumed=pools.order_assumed,
     )

@@ -11,6 +11,19 @@ from decimal import Decimal
 
 from engine.models import Disposal
 from engine.money import ZERO
+from engine.rules import common
+from engine.rules.base import Citation
+
+
+@dataclass(frozen=True, slots=True)
+class BusinessLine:
+    """One matched intraday or F&O round trip, for the "why?" drill-down."""
+
+    disposal: Disposal
+    speculative: bool
+    income: Decimal
+    """Gain after charges, minus STT."""
+    citations: tuple[Citation, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +32,7 @@ class BusinessIncome:
     non_speculative: Decimal
     speculative_stt: Decimal
     non_speculative_stt: Decimal
+    lines: tuple[BusinessLine, ...] = ()
 
 
 def _net(disposals: Iterable[Disposal]) -> tuple[Decimal, Decimal]:
@@ -30,6 +44,14 @@ def _net(disposals: Iterable[Disposal]) -> tuple[Decimal, Decimal]:
 def business_income(
     intraday: Iterable[Disposal], fno: Iterable[Disposal]
 ) -> BusinessIncome:
+    intraday, fno = list(intraday), list(fno)
     speculative, speculative_stt = _net(intraday)
     non_speculative, non_speculative_stt = _net(fno)
-    return BusinessIncome(speculative, non_speculative, speculative_stt, non_speculative_stt)
+    lines = [
+        BusinessLine(d, kind is common.SPECULATIVE, d.gain - d.stt,
+                     (kind, common.STT_BUSINESS_DEDUCTION))
+        for kind, items in ((common.SPECULATIVE, intraday), (common.NON_SPECULATIVE, fno))
+        for d in items
+    ]
+    return BusinessIncome(speculative, non_speculative, speculative_stt, non_speculative_stt,
+                          tuple(lines))

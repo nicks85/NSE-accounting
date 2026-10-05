@@ -15,6 +15,8 @@ from enum import StrEnum
 
 from engine.dates import add_months
 from engine.models import Disposal
+from engine.money import INTERNAL_SCALE
+from engine.notices import Notice
 from engine.rules import common
 from engine.rules.base import Citation, RulePack
 
@@ -51,11 +53,15 @@ class CapitalGainLine:
     citations: tuple[Citation, ...]
 
 
+BOUNDARY_DAYS = 3
+"""Sales this close to the 12-month boundary are flagged (day-count convention, Q-013)."""
+
+
 def capital_gain_line(
     disposal: Disposal, pack: RulePack, fmv_2018: Mapping[str, Decimal]
-) -> tuple[CapitalGainLine, list[str]]:
-    """Compute one disposal's capital gain under ``pack``. Returns (line, warnings)."""
-    warnings: list[str] = []
+) -> tuple[CapitalGainLine, list[Notice]]:
+    """Compute one disposal's capital gain under ``pack``. Returns (line, notices)."""
+    warnings: list[Notice] = []
     long_term_after = add_months(disposal.acquired_on, pack.listed_long_term_months)
     term = Term.LONG if disposal.sold_on > long_term_after else Term.SHORT
     rates = pack.rates_on(disposal.sold_on)
@@ -63,21 +69,27 @@ def capital_gain_line(
     citations = [common.HOLDING_PERIOD, common.FIFO, common.COMPUTATION,
                  common.LTCG_EQUITY if term is Term.LONG else common.STCG_EQUITY,
                  common.STT_PAID_ASSUMED]
+    if abs((disposal.sold_on - long_term_after).days) <= BOUNDARY_DAYS:
+        citations.append(common.HOLDING_BOUNDARY)
 
     cost = disposal.cost
     fmv_value: Decimal | None = None
     if term is Term.LONG and disposal.acquired_on < pack.grandfathering_before:
         per_share = fmv_2018.get(disposal.instrument)
         if per_share is None:
-            warnings.append(
-                f"{disposal.close_trade_id}: {disposal.instrument} acquired "
-                f"{disposal.acquired_on} needs its 31-Jan-2018 FMV for grandfathering; "
-                "actual cost used (may overstate tax)"
-            )
+            warnings.append(Notice(
+                "MISSING_FMV",
+                f"{disposal.instrument} acquired {disposal.acquired_on} needs its 31-Jan-2018 "
+                "FMV for grandfathering; actual cost used (may overstate tax)",
+                ref=disposal.close_trade_id,
+            ))
         else:
-            fmv_value = per_share * disposal.quantity / disposal.split_factor
+            fmv_value = (per_share * disposal.quantity / disposal.split_factor).quantize(
+                INTERNAL_SCALE)
             cost = max(disposal.cost, min(fmv_value, disposal.sale_value))
             citations.append(common.GRANDFATHERING)
+            if disposal.split_factor != 1:
+                citations.append(common.GRANDFATHERING_AFTER_SPLIT)
 
     gain = disposal.sale_value - disposal.transfer_expenses - cost
     line = CapitalGainLine(

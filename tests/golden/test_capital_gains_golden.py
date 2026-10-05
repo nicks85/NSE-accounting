@@ -128,7 +128,7 @@ def test_g14_grandfathering_missing_fmv_warns_and_uses_cost() -> None:
     1,09,375 → 1,09,380, with a warning."""
     r = compute_tax_year(2025, [buy("2015-01-01", 1000, 500), sell("2025-06-01", 1000, 1500)])
     assert r.special_rate_tax_rounded == d(109380)
-    assert any("31-Jan-2018 FMV" in w for w in r.warnings)
+    assert any("31-Jan-2018 FMV" in w.message for w in r.warnings)
 
 
 def test_g15_bonus_shares_short_term_and_original_loss_carried() -> None:
@@ -151,7 +151,7 @@ def test_g16_split_keeps_cost_and_date() -> None:
     r = compute_tax_year(2024, [buy("2024-01-01", 10, 5000), sell("2025-03-01", 50, 1200)],
                          actions=[Split(A, day("2024-06-01"), old=1, new=5)])
     assert r.bucket_nets == {lt("0.125"): d(10000)}
-    assert any("Q-002" in w for w in r.warnings)
+    assert any("Q-002" in w.message for w in r.warnings)
 
 
 def test_g17_stcl_against_ltcg() -> None:
@@ -206,7 +206,7 @@ def test_g21_fy2024_25_exemption_applied_to_12_5_first() -> None:
     ])
     assert r.setoff.exemption_used == {lt("0.125"): d(100000), lt("0.10"): d(25000)}
     assert r.special_rate_tax_rounded == d(7500)
-    assert any("Q-007" in w for w in r.warnings)
+    assert any("Q-007" in w.message for w in r.warnings)
 
 
 def test_g22_fy2024_25_old_rate_loss_against_new_rate_gain() -> None:
