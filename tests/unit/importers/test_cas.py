@@ -56,28 +56,86 @@ def test_round_trip_to_tax() -> None:
     assert report.special_rate_tax_rounded == Decimal(4400)
 
 
-def test_debt_guess_switches_and_reversal() -> None:
+def test_debt_guess_switches_and_reversal_cancels_purchase() -> None:
+    """QA case: a bounced SIP (reversal) must cancel that purchase, not be sold FIFO against
+    an older, cheaper lot (which would create a fake gain)."""
     debt = scheme("Synthetic Liquid Fund", DEBT, [
-        txn("2025-04-10", "SWITCH_IN", "100", "1000"),
-        txn("2025-05-10", "PURCHASE", "10", "1001"),
-        txn("2025-05-11", "REVERSAL", "-10", "1001"),
-        txn("2025-06-10", "SWITCH_OUT", "-100", "1010"),
+        txn("2025-04-10", "SWITCH_IN", "100", "100"),
+        txn("2025-05-10", "PURCHASE_SIP", "10", "150"),
+        txn("2025-05-10", "STAMP_DUTY_TAX", None, amount="0.07"),
+        txn("2025-05-11", "REVERSAL", "-10", "150"),
+        txn("2025-06-10", "SWITCH_OUT", "-100", "101"),
     ], fund_type="DEBT")
     imported = trades_from_cas(cas(("9", [debt])))
     assert imported.suggested_classes == {DEBT: FundClass.SPECIFIED}
-    assert [t.side for t in imported.result.trades] == [Side.BUY, Side.BUY, Side.SELL,
-                                                         Side.SELL]
-    assert any("reversal of -10 units" in w for w in imported.result.warnings)
+    assert [(t.side, t.quantity, t.price) for t in imported.result.trades] == [
+        (Side.BUY, Decimal(100), Decimal(100)), (Side.SELL, Decimal(100), Decimal(101))]
+    assert any("reversed on 2025-05-11; cancelled" in w for w in imported.result.warnings)
+    with pytest.raises(ImportFormatError, match="no matching earlier purchase"):
+        trades_from_cas(cas(("9", [scheme("X", DEBT, [
+            txn("2025-04-10", "PURCHASE", "10", "100"),
+            txn("2025-05-11", "REVERSAL", "-10", "150")])])))
+    with pytest.raises(ImportFormatError, match="no matching earlier purchase"):
+        trades_from_cas(cas(("9", [scheme("X", DEBT, [
+            txn("2025-05-11", "REVERSAL", "10", "150")])])))
 
 
-def test_merger_warns_and_unknown_type_guess_absent() -> None:
+def test_merger_refused_unless_allowed() -> None:
     merged = scheme("Synthetic Old Fund", EQ, [
         txn("2025-04-10", "PURCHASE", "10", "10"),
         txn("2025-08-01", "SWITCH_OUT_MERGER", "-10", "12"),
     ], fund_type=None)
-    imported = trades_from_cas(cas(("9", [merged])))
+    target = scheme("Synthetic New Fund", DEBT, [
+        txn("2025-08-01", "SWITCH_IN_MERGER", "6", "20"),
+    ], fund_type=None)
+    with pytest.raises(ImportFormatError, match=r"s\.70\(1\)\(zj\)"):
+        trades_from_cas(cas(("9", [merged, target])))
+    imported = trades_from_cas(cas(("9", [merged, target])), allow_mergers=True)
     assert imported.suggested_classes == {}
-    assert any("scheme merger" in w for w in imported.result.warnings)
+    assert len(imported.result.trades) == 3
+    assert sum("scheme merger" in w for w in imported.result.warnings) == 2
+
+
+def test_stamp_duty_and_stt_attach_to_the_row_before() -> None:
+    """Two purchases and two redemptions on one day, each followed by its own tax row."""
+    imported = trades_from_cas(cas(("9", [scheme("X", EQ, [
+        txn("2025-05-02", "PURCHASE", "10", "100"),
+        txn("2025-05-02", "STAMP_DUTY_TAX", None, amount="0.05"),
+        txn("2025-05-02", "PURCHASE", "20", "100"),
+        txn("2025-05-02", "STAMP_DUTY_TAX", None, amount="0.10"),
+        txn("2025-06-02", "REDEMPTION", "-5", "110"),
+        txn("2025-06-02", "STT_TAX", None, amount="0.01"),
+        txn("2025-06-02", "REDEMPTION", "-6", "110"),
+        txn("2025-06-02", "STT_TAX", None, amount="0.02"),
+    ])])))
+    trades = imported.result.trades
+    assert [t.charges for t in trades[:2]] == [Decimal("0.05"), Decimal("0.10")]
+    assert [t.stt for t in trades[2:]] == [Decimal("0.01"), Decimal("0.02")]
+
+
+def test_dividend_and_tds_totals_reported() -> None:
+    imported = trades_from_cas(cas(("9", [scheme("X", EQ, [
+        txn("2025-05-02", "PURCHASE", "10", "100"),
+        txn("2025-07-01", "DIVIDEND_PAYOUT", None, amount="100"),
+        txn("2025-12-01", "DIVIDEND_PAYOUT", None, amount="50"),
+        txn("2025-12-01", "TDS_TAX", None, amount="15"),
+    ])])))
+    assert any("FY 2025-26: dividends paid out ₹150" in w for w in imported.result.warnings)
+    assert any("FY 2025-26: TDS deducted ₹15" in w for w in imported.result.warnings)
+
+
+def test_duplicate_isin_in_folio_and_parse_warnings_refused() -> None:
+    with pytest.raises(ImportFormatError, match="appears twice"):
+        trades_from_cas(cas(("9", [scheme("A", EQ, []), scheme("B", EQ, [])])))
+    with pytest.raises(ImportFormatError, match=r"casparser found problems.*page 3 odd"):
+        trades_from_cas(cas(("9", []), warnings=["page 3 odd"]))
+    two_folios = trades_from_cas(cas(("1", [scheme("A", EQ, [])]), ("2", [scheme("A", EQ, [])])))
+    assert two_folios.result.trades == ()
+
+
+def test_unknown_transaction_type_refused() -> None:
+    with pytest.raises(ImportFormatError, match="unrecognised transaction type UNKNOWN"):
+        trades_from_cas(cas(("9", [scheme("X", EQ, [txn("2025-04-10", "UNKNOWN", "1", "1")])])))
 
 
 @pytest.mark.parametrize(("schemes", "message"), [
@@ -94,11 +152,9 @@ def test_refused_cases(schemes: list, message: str) -> None:
         trades_from_cas(cas(("9", schemes)))
 
 
-def test_summary_cas_refused_and_parse_warnings_kept() -> None:
+def test_summary_cas_refused() -> None:
     with pytest.raises(ImportFormatError, match="summary CAS"):
         trades_from_cas(cas(("9", []), detailed=False))
-    imported = trades_from_cas(cas(("9", []), warnings=["page 3 odd"]))
-    assert any("casparser: page 3 odd" in w for w in imported.result.warnings)
 
 
 def test_orphan_stamp_duty_and_zero_units_ignored() -> None:
@@ -108,7 +164,8 @@ def test_orphan_stamp_duty_and_zero_units_ignored() -> None:
         txn("2025-04-12", "PURCHASE", "1", "10", description="string date"),
     ])])))
     assert len(imported.result.trades) == 1
-    assert any("no matching transaction" in w for w in imported.result.warnings)
+    assert any("stamp_duty_tax ₹1 on 2025-04-10 had no matching" in w
+               for w in imported.result.warnings)
 
 
 def test_string_dates_and_bad_dates() -> None:
@@ -137,9 +194,13 @@ def test_load_cas_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(casparser, "read_cas_pdf", raising(IncorrectPasswordError("x")))
     with pytest.raises(ImportFormatError, match="wrong password"):
         load_cas(b"%PDF", password=PAN)
-    monkeypatch.setattr(casparser, "read_cas_pdf", raising(CASParseError("bad")))
-    with pytest.raises(ImportFormatError, match="couldn't read the CAS"):
-        load_cas(b"%PDF", password=PAN)
+    from casparser.exceptions import CASIntegrityError, HeaderParseError
+
+    for error in (CASParseError("bad"), HeaderParseError("h"), CASIntegrityError("i"),
+                  ValueError("date"), RuntimeError("pdfium")):
+        monkeypatch.setattr(casparser, "read_cas_pdf", raising(error))
+        with pytest.raises(ImportFormatError, match="couldn't read the CAS"):
+            load_cas(b"%PDF", password=PAN)
     monkeypatch.setattr(casparser, "read_cas_pdf", lambda *_, **__: object())
     with pytest.raises(ImportFormatError, match="demat"):
         load_cas(b"%PDF", password=PAN)
@@ -153,14 +214,3 @@ def test_real_pdf_parse_rejects_garbage() -> None:
     """Goes through casparser for real: a non-PDF must become a clean ImportFormatError."""
     with pytest.raises(ImportFormatError):
         load_cas(b"not a pdf at all", password=PAN)
-
-
-def test_future_transaction_type_is_warned_not_dropped_silently() -> None:
-    from types import SimpleNamespace
-
-    novel = SimpleNamespace(type="BONUS_UNITS", date=date(2025, 4, 10), amount=None,
-                            units=Decimal(5), nav=Decimal(10))
-    folio = cas(("9", [scheme("X", EQ, [])]))
-    folio.folios[0].schemes[0].transactions.append(novel)  # type: ignore[arg-type]
-    result = trades_from_cas(folio)
-    assert any("BONUS_UNITS on 2025-04-10 ignored" in w for w in result.result.warnings)

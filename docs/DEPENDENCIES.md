@@ -11,4 +11,7 @@ parse) loads `socket`, `ssl`, `urllib.request`, `http.client` or similar.
 | casparser (+ pypdfium2, pydantic, rich, click, dateutil) | Parsing CAMS/KFintech CAS PDFs | None in the parsing path | Imported lazily by `importers/cas.py` |
 | casparser-isin (+ rapidfuzz) | Local ISIN / AMFI database (SQLite, bundled) | **Yes**: `casparser_isin/cli.py` downloads database updates via `urllib.request` | Never imported by Kosh (guard test checks `casparser_isin.cli` is not loaded). **Packaging (Phase 5): strip `casparser_isin/cli.py` from the bundled app.** |
 
+casparser-isin reads its database from the bundled file unless the environment variable
+`CASPARSER_ISIN_DB` points elsewhere; the packaged app must not set it.
+
 Dev-only tools (pytest, ruff, mypy) are not shipped.
