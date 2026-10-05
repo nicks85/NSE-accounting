@@ -224,3 +224,34 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   significant digits.
 - **Needed:** a real protected Groww XLSX and an XLSX export from Zerodha or Upstox.
 - **Status:** open.
+
+## Q-019 — Mutual fund classification
+
+- **Area:** `engine/classify/funds.py`, `compute_tax_year(fund_classes=...)`.
+- **Implemented as:** each fund's class (equity-oriented / specified / other) is supplied per
+  ISIN. Without a class a fund is treated as "other" and flagged. Importers may pre-fill a class
+  from the scheme name; that guess is flagged UNVERIFIED and should be confirmed by the user.
+- **Law:** equity-oriented fund — 2025 Act s.198(8) (65% in domestic listed equity; 90%/90% for
+  a fund of funds). Specified fund — 2025 Act s.76(5)(b): more than 65% in debt and money
+  market instruments. The 1961 Act definition (s.50AA) was "not more than 35% in equity shares
+  of domestic companies" for FY 2023-24 and FY 2024-25 and was changed to the 65%-debt test from
+  FY 2025-26 (Finance (No. 2) Act 2024); the class supplied must match the year (not yet
+  checked against an official 1961 text).
+- **Status:** open (data input + 1961 text).
+
+## Q-020 — FIFO for fund units: per folio or per scheme
+
+- **Area:** CAS importer (instrument = ISIN#FOLIO).
+- **Best guess implemented:** units are matched first-in-first-out within each folio. s.67(7)(c)
+  prescribes FIFO for securities held in demat form; for statement-held (non-demat) units the Act
+  is silent and practice is FIFO within the folio.
+- **Status:** open.
+
+## Q-021 — Non-equity fund redemptions before 23-Jul-2024
+
+- **Area:** `engine/classify/capital_gains.py` (`manual` lines).
+- **Implemented as:** not computed. Before 23-Jul-2024 such units needed 36 months for long-term
+  and LTCG was taxed at 20% with indexation (cost inflation index). Kosh flags these lines and
+  excludes them from the totals rather than guess the index values.
+- **Needed:** official CII notification values to implement it (FY 2024-25 only).
+- **Status:** open.

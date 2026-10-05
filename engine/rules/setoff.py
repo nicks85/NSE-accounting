@@ -72,7 +72,9 @@ class SetOffResult:
     """True when a loss could go to more than one bucket and the Q-008 order decided it."""
 
     def tax(self) -> Decimal:
-        return sum((amount * bucket.rate for bucket, amount in self.gains.items()), ZERO)
+        """Tax at the special rates; slab-rate buckets are reported but not taxed here."""
+        return sum((amount * bucket.rate for bucket, amount in self.gains.items()
+                    if bucket.rate is not None), ZERO)
 
 
 SPECULATIVE_LABEL = "Speculative income"
@@ -96,7 +98,7 @@ class _Pools:
 
     def by_rate(self, term: Term | None) -> list[Bucket]:
         buckets = [b for b in self.gains if term is None or b.term is term]
-        return sorted(buckets, key=lambda b: (-b.rate, b.term))
+        return sorted(buckets, key=lambda b: b.sort_key)
 
     def against_gains(
         self, amount: Decimal, targets: list[Bucket], loss: str, citation: Citation
@@ -183,7 +185,7 @@ def set_off(
     # 5. LTCG exemption.
     exemption_left = pack.ltcg_exemption
     exemption_used: dict[Bucket, Decimal] = {}
-    for bucket in long_only:
+    for bucket in (b for b in long_only if b.exemption_eligible):
         take = min(exemption_left, pools.gains[bucket])
         if take > 0:
             pools.gains[bucket] -= take

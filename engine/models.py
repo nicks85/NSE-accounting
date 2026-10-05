@@ -18,6 +18,8 @@ class Segment(StrEnum):
     """Cash-market equity (delivery or intraday)."""
     FNO = "FNO"
     """Exchange-traded futures and options."""
+    MUTUAL_FUND = "MF"
+    """Mutual fund units bought from / redeemed with the fund (e.g. from a CAS)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +112,8 @@ class Lot:
             require_decimal(name, getattr(self, name))
         if self.quantity == 0:
             raise ValueError("lot quantity must be non-zero")
-        if self.quantity < 0 and self.segment is Segment.EQUITY and not self.intraday:
-            raise ValueError(f"{self.source_trade_id}: cash-equity lot cannot be short")
+        if self.quantity < 0 and self.segment is not Segment.FNO and not self.intraday:
+            raise ValueError(f"{self.source_trade_id}: cash-equity or fund lot cannot be short")
         if self.value < 0 or self.charges < 0 or self.stt < 0:
             raise ValueError(f"{self.source_trade_id}: value, charges and stt must be non-negative")
 
@@ -172,6 +174,7 @@ class Disposal:
     open_trade_id: str
     close_trade_id: str
     split_factor: Decimal = Decimal(1)
+    segment: Segment = Segment.EQUITY
     stripped_loss: Decimal = Decimal(0)
     """Loss ignored under the bonus-stripping rule (moved into the bonus shares' cost)."""
 

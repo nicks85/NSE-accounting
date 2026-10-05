@@ -54,6 +54,13 @@ class RulePack:
     listed_long_term_months: int = 12
     grandfathering_before: date = date(2018, 2, 1)
     grandfathering_fmv_date: date = date(2018, 1, 31)
+    unlisted_long_term_months: int = 24
+    """Fund units (non-equity) and other unlisted assets after 23-Jul-2024."""
+    non_equity_cutover: date = date(2024, 7, 23)
+    """Non-equity transfers before this used 36 months and 20% with indexation (not
+    supported; such lines are flagged for manual computation)."""
+    specified_fund_from: date = date(2023, 4, 1)
+    other_ltcg_rate: Decimal = Decimal("0.125")
     capital_loss_carry_years: int = 8
     business_loss_carry_years: int = 8
     speculative_loss_carry_years: int = 4

@@ -12,7 +12,8 @@ from types import MappingProxyType
 
 from engine import __version__
 from engine.classify.business_income import BusinessIncome, business_income
-from engine.classify.capital_gains import Bucket, CapitalGainLine, Term, capital_gain_line
+from engine.classify.capital_gains import Bucket, CapitalGainLine, capital_gain_line
+from engine.classify.funds import FundClass
 from engine.classify.trades import classify_trades
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
@@ -26,6 +27,7 @@ from engine.rules.rounding import round_to_ten
 from engine.rules.setoff import LossEntry, SetOffResult, set_off
 
 __all__ = [
+    "FundClass",
     "LossEntry",
     "Notice",
     "TaxYearReport",
@@ -77,12 +79,14 @@ def compute_tax_year(
     opening_lots: Iterable[Lot] = (),
     actions: Iterable[CorporateAction] = (),
     fmv_2018: Mapping[str, Decimal] | None = None,
+    fund_classes: Mapping[str, FundClass] | None = None,
     brought_forward: Iterable[LossEntry] = (),
 ) -> TaxYearReport:
     """Compute one tax year (``start_year`` 2024 → FY 2024-25).
 
     ``trades`` may span several years; history is needed for FIFO. Only disposals closed in
-    the requested year are taxed. ``fmv_2018`` maps instrument → 31-Jan-2018 FMV per share.
+    the requested year are taxed. ``fmv_2018`` maps ISIN → 31-Jan-2018 FMV per share or unit
+    (NAV for fund units). ``fund_classes`` maps a fund's ISIN → its ``FundClass``.
     """
     pack = pack_for_year(start_year)
     _, year_end = tax_year_bounds(start_year)
@@ -101,7 +105,7 @@ def compute_tax_year(
 
     lines: list[CapitalGainLine] = []
     for disposal in _in_year(delivery.disposals, start_year):
-        line, line_notices = capital_gain_line(disposal, pack, fmv_2018 or {})
+        line, line_notices = capital_gain_line(disposal, pack, fmv_2018 or {}, fund_classes)
         lines.append(line)
         warnings.extend(line_notices)
         if disposal.stripped_loss:
@@ -115,7 +119,8 @@ def compute_tax_year(
 
     nets: dict[Bucket, Decimal] = {}
     for line in lines:
-        nets[line.bucket] = nets.get(line.bucket, ZERO) + line.gain
+        if not line.manual:
+            nets[line.bucket] = nets.get(line.bucket, ZERO) + line.gain
     business = business_income(_in_year(intraday.disposals, start_year),
                                _in_year(fno.disposals, start_year))
     result = set_off(pack, nets, business.speculative, business.non_speculative,
@@ -125,7 +130,7 @@ def compute_tax_year(
     used: list[Citation] = [c for line in lines for c in line.citations]
     used += [c for line in business.lines for c in line.citations]
     used += [step.citation for step in result.steps]
-    long_term_rates = {b.rate for b in nets if b.term is Term.LONG}
+    long_term_rates = {b.rate for b in nets if b.exemption_eligible}
     if result.exemption_used and len(long_term_rates) > 1:  # FY 2024-25 split rates
         used += [c for c in pack.citations.values() if c.question == "Q-007"]
     if result.order_assumed:
@@ -166,6 +171,7 @@ def compute_tax_years(
     opening_lots: Iterable[Lot] = (),
     actions: Iterable[CorporateAction] = (),
     fmv_2018: Mapping[str, Decimal] | None = None,
+    fund_classes: Mapping[str, FundClass] | None = None,
     brought_forward: Iterable[LossEntry] = (),
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next."""
@@ -177,7 +183,8 @@ def compute_tax_years(
     reports = []
     for year in years:
         report = compute_tax_year(year, trade_list, opening_lots=lot_list, actions=action_list,
-                                  fmv_2018=fmv_2018, brought_forward=carried)
+                                  fmv_2018=fmv_2018, fund_classes=fund_classes,
+                                  brought_forward=carried)
         reports.append(report)
         carried = list(report.carried_forward)
     return reports
