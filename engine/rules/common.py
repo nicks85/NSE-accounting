@@ -69,6 +69,9 @@ BONUS_STRIPPING = Citation(
     "Loss on shares bought within 3 months before a bonus record date and sold within 9 months "
     "after it is ignored and added to the cost of the bonus shares still held",
     "s.94(8)", "s.175(9),(10)", ACT_2025_URL)
+BONUS_STRIPPING_WINDOW = Citation(
+    "Bonus-stripping 3-month / 9-month window boundaries assumed",
+    "s.94(8)", "s.175(9)", ACT_2025_URL, unverified=True, question="Q-014")
 ROUNDING = Citation(
     "Tax rounded to the nearest ₹10 (paise ignored, 5 and above rounds up)", "s.288B",
     "s.516", ACT_2025_URL)
@@ -80,7 +83,8 @@ COMMON = {
         GRANDFATHERING_AFTER_SPLIT, STCG_EQUITY, LTCG_EQUITY, LTCG_EXEMPTION, SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,
-        CARRY_SPECULATIVE, RETURN_OF_LOSS, BONUS_STRIPPING, ROUNDING,
+        CARRY_SPECULATIVE, RETURN_OF_LOSS, BONUS_STRIPPING, BONUS_STRIPPING_WINDOW,
+        ROUNDING,
     )
 }
 

@@ -23,6 +23,7 @@ def test_g51_loss_stripped_and_moved_to_bonus_cost() -> None:
     [bonus_lot] = r.open_lots
     assert bonus_lot.cost == d(50000)
     assert any("bonus stripping" in w.message for w in r.warnings)
+    assert any(w.question == "Q-014" for w in r.warnings)
 
 
 def test_g52_later_sale_of_bonus_shares_uses_stripped_cost() -> None:
