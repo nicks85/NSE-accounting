@@ -191,3 +191,13 @@ def test_ex_date_intraday_round_trip_with_split() -> None:
     intraday = match_fifo(classified.intraday, allow_short=True)
     [pair] = intraday.disposals
     assert pair.gain == dec(10) and not intraday.open_lots
+
+
+def test_split_factor_counts_only_splits_after_31_jan_2018() -> None:
+    result = match_fifo(
+        [trade("BUY", "2015-01-01", 10, 100)],
+        actions=[Split(ISIN, date(2017, 6, 1), old=1, new=2),
+                 Split(ISIN, date(2019, 6, 1), old=1, new=5)],
+    )
+    [lot] = result.open_lots
+    assert (lot.quantity, lot.split_factor) == (dec(100), dec(5))
