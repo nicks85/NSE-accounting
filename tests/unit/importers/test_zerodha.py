@@ -67,7 +67,7 @@ def test_rejects_wrong_files(bad: str, message: str) -> None:
 
 
 @pytest.mark.parametrize(("row", "message"), [
-    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "tradebook row 2: trade_type 'hold'"),
+    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "tradebook row 2: trade type 'hold'"),
     (Row("SYNTHA", "2025-05-01", "buy", "ten", "1"), "row 2 quantity: not a number"),
     (Row("SYNTHA", "05.01.2025", "buy", "1", "1"), "row 2 trade_date: unrecognised date"),
     (Row("SYNTHA", "2025-05-01", "buy", "0", "1"), "row 2: .*quantity must be positive"),
