@@ -14,8 +14,15 @@ against older delivery lots and reported as a capital gain.
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import Decimal
 
+from engine.matching.corporate_actions import (
+    CorporateAction,
+    Split,
+    apply_split,
+    bonus_lot,
+)
 from engine.models import Disposal, Lot, Segment, Side, Trade
 
 
@@ -27,6 +34,7 @@ class InsufficientHoldingsError(ValueError):
 class MatchResult:
     disposals: tuple[Disposal, ...]
     open_lots: tuple[Lot, ...]
+    warnings: tuple[str, ...] = ()
 
 
 class FifoBook:
@@ -35,6 +43,7 @@ class FifoBook:
     def __init__(self, opening_lots: Iterable[Lot] = ()) -> None:
         self._lots: dict[str, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
+        self._warnings: list[str] = []
         for lot in sorted(opening_lots, key=lambda lot: lot.acquired_on):
             self._lots.setdefault(lot.instrument, deque()).append(lot)
 
@@ -77,16 +86,47 @@ class FifoBook:
             )
         )
 
+    def apply_action(self, action: CorporateAction) -> None:
+        queue = self.lots(action.instrument)
+        if isinstance(action, Split):
+            lots, warnings = apply_split(list(queue), action)
+            queue.clear()
+            queue.extend(lots)
+        else:
+            lot, warnings = bonus_lot(list(queue), action)
+            if lot is not None:
+                queue.append(lot)
+        self._warnings.extend(warnings)
+
     def result(self) -> MatchResult:
         open_lots = tuple(lot for q in self._lots.values() for lot in q)
-        return MatchResult(disposals=tuple(self._disposals), open_lots=open_lots)
+        return MatchResult(
+            disposals=tuple(self._disposals),
+            open_lots=open_lots,
+            warnings=tuple(self._warnings),
+        )
 
 
-def match_fifo(trades: Iterable[Trade], opening_lots: Iterable[Lot] = ()) -> MatchResult:
-    """Match trades FIFO. Trades are ordered by date, keeping input order within a day."""
+def match_fifo(
+    trades: Iterable[Trade],
+    opening_lots: Iterable[Lot] = (),
+    actions: Iterable[CorporateAction] = (),
+) -> MatchResult:
+    """Match trades FIFO, applying corporate actions on their ex-dates.
+
+    Events are ordered by date; on the same date corporate actions come before trades
+    (trades on the ex-date are at post-action prices). Input order is kept within a day.
+    """
     book = FifoBook(opening_lots)
-    for trade in sorted(trades, key=lambda t: t.trade_date):
-        book.apply(trade)
+    events: list[tuple[date, int, Trade | CorporateAction]] = [
+        (a.ex_date, 0, a) for a in actions
+    ]
+    events += [(t.trade_date, 1, t) for t in trades]
+    for _, _, event in sorted(events, key=lambda e: (e[0], e[1])):
+        if isinstance(event, Trade):
+            book.apply(event)
+        else:
+            book.apply_action(event)
     return book.result()
 
 
