@@ -10,17 +10,21 @@ from decimal import ROUND_FLOOR
 from engine.models import Lot, Segment
 from engine.money import ZERO
 
+ACT_2025 = "https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
+
 UNVERIFIED_SPLIT = True  # surfaced as a warning on every split applied
-"""Split treatment (cost unchanged, holding period carried over) follows standard practice
-but no statutory citation has been confirmed. See docs/OPEN_QUESTIONS.md Q-002."""
+"""The cost side of a split is cited (2025 Act s.90(9)(d); 1961 Act s.55(2)(b)(v)), but carrying
+over the holding period rests on practice, not an explicit provision. See Q-002."""
 
 
 @dataclass(frozen=True, slots=True)
 class Split:
-    """Sub-division: every ``old`` shares become ``new`` shares (e.g. face value 10 → 2 is 1:5).
+    """Sub-division or consolidation: every ``old`` shares become ``new`` shares
+    (e.g. face value 10 → 2 is 1:5).
 
-    Total cost and acquisition date of each lot are unchanged; only quantity changes.
-    UNVERIFIED (Q-002).
+    Cost follows the original shares: Income-tax Act 2025 s.90(9)(d)(i),(iv); 1961 Act
+    s.55(2)(b)(v). Source: ``ACT_2025``. The acquisition date is carried over too — that
+    part is UNVERIFIED (docs/OPEN_QUESTIONS.md Q-002).
     """
 
     instrument: str
@@ -37,14 +41,13 @@ class Split:
 class Bonus:
     """Bonus issue of ``bonus`` shares for every ``held`` shares.
 
-    Cost of bonus shares is nil: Income-tax Act 1961 s.55(2)(aa)(iiia) (financial asset
-    allotted without payment on the basis of holding another financial asset). Source:
-    https://www.incometaxindia.gov.in/w/section-55-59 (not fetchable from dev environment).
-    Income-tax Act 2025 equivalent: pending. See docs/OPEN_QUESTIONS.md Q-001.
+    Cost of bonus shares is nil: Income-tax Act 2025 s.90(5)(b), s.90(6)(d); 1961 Act
+    s.55(2)(aa)(iiia). Source: ``ACT_2025``.
 
-    The bonus shares form a new lot whose holding period starts on allotment (the general
-    rule in s.2(42A); no Explanation carries over the original shares' holding period).
-    ``allotment_date`` defaults to ``ex_date`` when the actual date is not known — see Q-003.
+    The bonus shares form a new lot whose holding period runs from the date of allotment:
+    2025 Act s.2(101)(c)(C)(IV); 1961 Act s.2(42A). ``allotment_date`` defaults to
+    ``ex_date`` when the actual date is not known — see docs/OPEN_QUESTIONS.md Q-003.
+    Bonus stripping (2025 Act s.175(9),(10)) is not yet applied — see Q-005.
     Entitlement is computed on the total holding; fractional entitlements are not allotted
     as shares and are dropped with a warning.
     """

@@ -1,15 +1,18 @@
 """Split trades into delivery, intraday (speculative) and F&O (non-speculative).
 
 Intraday: a cash-equity purchase and sale of the same scrip on the same day is settled
-without delivery, so it is a speculative transaction — Income-tax Act 1961 s.43(5): "a
-transaction in which a contract for the purchase or sale of any commodity, including stocks
-and shares, is periodically or ultimately settled otherwise than by the actual delivery or
-transfer of the commodity or scrips". Source: https://www.incometaxindia.gov.in/w/section-43-59
+without delivery, so it is a speculative transaction — "a transaction in which a contract for
+the purchase or sale of any commodity, including stocks and shares, is periodically or
+ultimately settled otherwise than by the actual delivery or transfer of the commodity or
+scrips": Income-tax Act 2025 s.66(31); 1961 Act s.43(5). Speculation business is distinct
+from any other business: 2025 Act s.26(3).
 
-F&O: an eligible transaction in derivatives on a recognised stock exchange is not speculative —
-s.43(5) proviso, clause (d). Same source.
+F&O: a specified derivative transaction on a recognised stock exchange is excluded from
+speculative transactions: 2025 Act s.66(31)(a), s.66(33); 1961 Act s.43(5) proviso (d).
 
-Income-tax Act 2025 equivalents: pending, see docs/OPEN_QUESTIONS.md Q-001.
+Sources: docs/sources/income-tax-act-2025-as-amended-by-fa-2026.pdf (official text from
+https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf);
+1961 Act: https://www.incometaxindia.gov.in/w/section-43-59
 
 UNVERIFIED (Q-004): which units count as intraday when a scrip has several trades on one day,
 or is also held from earlier, is a netting convention (same-day buys and sells netted, first
