@@ -242,7 +242,10 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   FY 2025-26 (Finance (No. 2) Act 2024); the class supplied must match the year (not yet
   checked against an official 1961 text). `compute_tax_years(fund_classes_by_year=...)` lets
   the class differ by year; a "specified" class used for a year before FY 2025-26 is flagged.
-  `unclassified_funds()` lists funds still needing a class.
+  `unclassified_funds()` lists funds still needing a class. casparser's database only knows
+  EQUITY and DEBT and labels overseas funds of funds, gold ETFs/FoFs, conservative hybrids and
+  multi-asset funds EQUITY — none of which is equity-oriented — so every suggested class is
+  warned and must be confirmed.
 - **Status:** open (data input + 1961 text).
 
 ## Q-020 — FIFO for fund units: per folio or per scheme
@@ -283,3 +286,27 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   without that carve-out. Whether listed units get 12 or 24 months under the 2025 Act needs
   confirmation.
 - **Status:** open.
+
+## Q-022 — CAS PDF → trades mapping unconfirmed
+
+- **Area:** `importers/cas.py`.
+- **Implemented as:** casparser parses the PDF; Kosh maps its transactions: purchases, SIPs,
+  switch-ins and dividend reinvestments become buys at NAV, each followed stamp-duty row added
+  to that purchase's cost; redemptions and switch-outs become sells, each following STT row
+  recorded on that sale. A reversal cancels the latest earlier purchase with the same units and
+  NAV. Dividend payouts and TDS are summed per year as notes (income from other sources, not
+  handled). Gifts, segregated portfolios, unknown transaction types, a scheme that opens with
+  units (cost unknown: a CAS from inception is needed), the same ISIN twice in a folio, and
+  statements where casparser reports parse problems are refused.
+- **Cost basis:** units x NAV (plus stamp duty), not the printed amount: the CAS amount column
+  may already include stamp duty, which would then be counted twice. May differ from the amount
+  paid by a few paise.
+- **Mergers:** a scheme merger/consolidation isn't a transfer (2025 Act s.70(1)(zj), (zk);
+  1961 Act s.47(xviii), (xix)); cost and holding period carry over (2025 Act
+  s.2(101)(c)(B)(VII), (IX); 1961 Act s.49(2AD), s.2(42A) Expl. 1(hf) — 1961 numbers not
+  checked against an official text). Kosh can't carry lots across schemes yet, so statements
+  with mergers are refused unless the user allows them to be imported as a sale and purchase
+  (gain overstated, warned).
+- **Needed:** an anonymised real detailed CAS (CAMS and KFintech) to confirm the mapping.
+- **Status:** open.
+

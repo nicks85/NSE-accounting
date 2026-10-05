@@ -6,6 +6,7 @@ readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
+    "casparser>=1.4.1",
     "msoffcrypto-tool>=6.0.0",
 ]
 
@@ -41,7 +42,7 @@ python_version = "3.12"
 packages = ["engine", "importers"]
 
 [[tool.mypy.overrides]]
-module = ["msoffcrypto", "msoffcrypto.*"]
+module = ["msoffcrypto", "msoffcrypto.*", "casparser", "casparser.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

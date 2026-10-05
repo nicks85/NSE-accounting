@@ -61,15 +61,24 @@ def test_guard_allows_safe_imports() -> None:
 
 
 def test_runtime_dependencies_load_no_network_modules() -> None:
-    """Importing the engine, importers and msoffcrypto (used for protected XLSX) must not pull
-    in networking modules, checked in a fresh interpreter."""
+    """Importing the engine, importers, msoffcrypto (protected XLSX) and casparser (CAS PDF),
+    including casparser's parser and ISIN-database modules and an ISIN lookup, must not pull in
+    networking modules (fresh interpreter).
+    casparser-isin's update CLI (casparser_isin.cli) uses urllib.request, so this also proves
+    Kosh never loads it."""
     import subprocess
     import sys
 
     code = (
         "import sys, engine.api, importers.zerodha, importers.upstox, importers.mapped, "
-        "importers.xlsx, msoffcrypto, msoffcrypto.format.ooxml; "
-        "bad = sorted(m for m in sys.modules if m in "
+        "importers.xlsx, importers.cas, msoffcrypto, msoffcrypto.format.ooxml, casparser, "
+        "casparser.parsers.cams_detailed, casparser.parsers._isin, casparser.analysis, "
+        "casparser_isin, rapidfuzz, dateutil, pypdfium2\n"
+        "from casparser.parsers._isin import isin_search\n"
+        "isin_search('Synthetic Flexi Cap Fund', 'CAMS', 'X1', 'INF000E01011')\n"
+        "from importers.cas import load_cas\n"
+        "try:\n    load_cas(b'not a pdf', password='x')\nexcept Exception:\n    pass\n"
+        "bad = sorted(m for m in sys.modules if m == 'casparser_isin.cli' or m in "
         "{'socket', 'ssl', 'urllib.request', 'http.client', 'requests', 'httpx', 'urllib3'}); "
         "print(','.join(bad))"
     )
