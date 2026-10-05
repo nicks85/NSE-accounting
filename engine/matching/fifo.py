@@ -3,7 +3,12 @@
 Listed shares held in demat form are matched first-in-first-out: Income-tax Act 1961,
 s.45(2A) and its Explanation; carried into the Income-tax Act 2025 (see
 docs/OPEN_QUESTIONS.md Q-001 for the pending 2025 section citation).
-F&O positions are matched FIFO as well, which also supports short positions.
+F&O positions are matched FIFO as well (including short positions). That is a matching
+convention for business-income computation, not a statutory rule.
+
+Contract: equity trades passed here must be delivery trades only. Same-day intraday buys and
+sells are split out by ``engine.classify`` first; otherwise an intraday pair would be matched
+against older delivery lots and reported as a capital gain.
 """
 
 from collections import deque
@@ -30,7 +35,7 @@ class FifoBook:
     def __init__(self, opening_lots: Iterable[Lot] = ()) -> None:
         self._lots: dict[str, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
-        for lot in opening_lots:
+        for lot in sorted(opening_lots, key=lambda lot: lot.acquired_on):
             self._lots.setdefault(lot.instrument, deque()).append(lot)
 
     def lots(self, instrument: str) -> deque[Lot]:
@@ -39,6 +44,13 @@ class FifoBook:
     def apply(self, trade: Trade) -> None:
         is_buy = trade.side is Side.BUY
         queue = self.lots(trade.instrument)
+        if not is_buy and trade.segment is Segment.EQUITY:
+            held = sum((lot.quantity for lot in queue if lot.is_long), Decimal(0))
+            if held < trade.quantity:  # checked up front so a failed sell leaves the book intact
+                raise InsufficientHoldingsError(
+                    f"{trade.trade_id}: selling {trade.quantity} of {trade.instrument} on "
+                    f"{trade.trade_date} but only {held} held"
+                )
         remaining = trade
         while queue and queue[0].is_long != is_buy:
             lot, rest = queue[0].take(min(remaining.quantity, abs(queue[0].quantity)))
@@ -52,11 +64,6 @@ class FifoBook:
                 return
             remaining = remaining_or_none
 
-        if not is_buy and trade.segment is Segment.EQUITY:
-            raise InsufficientHoldingsError(
-                f"{trade.trade_id}: selling {trade.quantity} of {trade.instrument} on "
-                f"{trade.trade_date} but only {trade.quantity - remaining.quantity} held"
-            )
         queue.append(
             Lot(
                 instrument=trade.instrument,
@@ -66,6 +73,7 @@ class FifoBook:
                 charges=remaining.charges,
                 stt=remaining.stt,
                 source_trade_id=trade.trade_id,
+                segment=trade.segment,
             )
         )
 

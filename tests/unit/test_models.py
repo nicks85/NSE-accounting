@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from engine.models import Lot, Side, Trade
+from engine.models import Lot, Segment, Side, Trade
 from tests.factories import dec, trade
 
 
@@ -47,3 +47,13 @@ def test_lot_take_conserves_amounts_exactly() -> None:
 def test_lot_rejects_zero_quantity() -> None:
     with pytest.raises(ValueError, match="non-zero"):
         Lot("X", date(2024, 1, 1), dec(0), dec(0), dec(0), dec(0), "T1")
+
+
+def test_lot_rejects_short_equity_and_negative_amounts() -> None:
+    with pytest.raises(ValueError, match="cannot be short"):
+        Lot("X", date(2024, 1, 1), dec(-1), dec(10), dec(0), dec(0), "T1")
+    with pytest.raises(ValueError, match="non-negative"):
+        Lot("X", date(2024, 1, 1), dec(1), dec(-10), dec(0), dec(0), "T1")
+    short = Lot("F", date(2024, 1, 1), dec(-1), dec(10), dec(0), dec(0), "T1", Segment.FNO)
+    with pytest.raises(ValueError, match="no cost"):
+        _ = short.cost

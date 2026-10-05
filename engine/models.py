@@ -68,7 +68,8 @@ class Trade:
 class Lot:
     """An open position, keeping the opening trade's gross value, charges and STT.
 
-    For F&O a negative ``quantity`` is a short position opened by a sell.
+    For F&O a negative ``quantity`` is a short position opened by a sell; cash equity cannot
+    be held short.
     """
 
     instrument: str
@@ -78,12 +79,17 @@ class Lot:
     charges: Decimal
     stt: Decimal
     source_trade_id: str
+    segment: Segment = Segment.EQUITY
 
     def __post_init__(self) -> None:
         for name in ("quantity", "value", "charges", "stt"):
             require_decimal(name, getattr(self, name))
         if self.quantity == 0:
             raise ValueError("lot quantity must be non-zero")
+        if self.quantity < 0 and self.segment is Segment.EQUITY:
+            raise ValueError(f"{self.source_trade_id}: cash-equity lot cannot be short")
+        if self.value < 0 or self.charges < 0 or self.stt < 0:
+            raise ValueError(f"{self.source_trade_id}: value, charges and stt must be non-negative")
 
     @property
     def is_long(self) -> bool:
@@ -92,6 +98,8 @@ class Lot:
     @property
     def cost(self) -> Decimal:
         """Cost of a long lot: gross value plus charges (excluding STT)."""
+        if not self.is_long:
+            raise ValueError(f"{self.source_trade_id}: a short lot has no cost")
         return self.value + self.charges
 
     def take(self, quantity: Decimal) -> tuple["Lot", "Lot | None"]:

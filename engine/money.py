@@ -6,7 +6,10 @@ ZERO = Decimal(0)
 INTERNAL_SCALE = Decimal("1e-10")
 """Fixed scale for apportioned shares. Keeping every split amount at this scale makes later
 additions and subtractions exact (no silent loss at the 28-digit context limit), so split
-pieces always sum back to the original. Final rounding happens only at reporting."""
+pieces always sum back to the original. Final rounding happens only at reporting.
+
+Bound: with the default 28-digit context, amounts up to about 1e17 rupees are exact at this
+scale; larger values raise ``decimal.InvalidOperation`` rather than silently rounding."""
 
 
 def require_decimal(name: str, value: object) -> Decimal:
