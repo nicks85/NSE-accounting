@@ -53,6 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked  # the UI talks to the real engine through the preview bridge
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: app/package.json
