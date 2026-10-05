@@ -5,7 +5,9 @@ description = "Offline Indian share-market tax calculator"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "msoffcrypto-tool>=6.0.0",
+]
 
 [dependency-groups]
 dev = [
@@ -37,6 +39,10 @@ select = ["E", "F", "W", "I", "B", "UP", "N", "S", "SIM", "RUF"]
 strict = true
 python_version = "3.12"
 packages = ["engine", "importers"]
+
+[[tool.mypy.overrides]]
+module = ["msoffcrypto", "msoffcrypto.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

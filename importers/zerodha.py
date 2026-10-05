@@ -19,7 +19,13 @@ from collections.abc import Iterable
 
 from engine.models import Segment, Side
 from importers.base import ImportResult
-from importers.tabular import BrokerProfile, parse_tradebook, parse_tradebooks
+from importers.tabular import (
+    BrokerProfile,
+    load_tradebook,
+    load_tradebooks,
+    parse_tradebook,
+    parse_tradebooks,
+)
 
 NOTES = (
     "Zerodha tradebook format is unconfirmed (docs/OPEN_QUESTIONS.md Q-015); check the "
@@ -58,3 +64,14 @@ def parse_zerodha_tradebooks(files: Iterable[tuple[str, str]]) -> ImportResult:
     """Parse several yearly exports, given as (name, text) pairs. Console limits each
     download to 365 days, so overlapping files are common; identical trades count once."""
     return parse_tradebooks(files, PROFILE)
+
+
+def load_zerodha_tradebook(data: bytes, *, name: str = "tradebook",
+                        password: str | None = None) -> ImportResult:
+    """CSV or XLSX bytes."""
+    return load_tradebook(data, PROFILE, name=name, password=password)
+
+
+def load_zerodha_tradebooks(files: Iterable[tuple[str, bytes]], *,
+                         password: str | None = None) -> ImportResult:
+    return load_tradebooks(files, PROFILE, password=password)

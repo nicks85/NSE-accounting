@@ -58,3 +58,21 @@ def test_guard_detects_forbidden_imports() -> None:
 def test_guard_allows_safe_imports() -> None:
     for src in ["from decimal import Decimal", "import urllib.parse", "import json"]:
         assert not any(_is_forbidden(m) for m in _imported_modules(ast.parse(src))), src
+
+
+def test_runtime_dependencies_load_no_network_modules() -> None:
+    """Importing the engine, importers and msoffcrypto (used for protected XLSX) must not pull
+    in networking modules, checked in a fresh interpreter."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, engine.api, importers.zerodha, importers.upstox, importers.mapped, "
+        "importers.xlsx, msoffcrypto, msoffcrypto.format.ooxml; "
+        "bad = sorted(m for m in sys.modules if m in "
+        "{'socket', 'ssl', 'urllib.request', 'http.client', 'requests', 'httpx', 'urllib3'}); "
+        "print(','.join(bad))"
+    )
+    out = subprocess.run(  # noqa: S603 - fixed command, no user input
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=ROOT)
+    assert out.stdout.strip() == ""

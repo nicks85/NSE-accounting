@@ -16,7 +16,13 @@ from collections.abc import Iterable
 
 from engine.models import Segment, Side
 from importers.base import ImportResult
-from importers.tabular import BrokerProfile, parse_tradebook, parse_tradebooks
+from importers.tabular import (
+    BrokerProfile,
+    load_tradebook,
+    load_tradebooks,
+    parse_tradebook,
+    parse_tradebooks,
+)
 
 PROFILE = BrokerProfile(
     key="UPSTOX",
@@ -59,3 +65,14 @@ def parse_upstox_tradebook(text: str, *, name: str = "tradebook") -> ImportResul
 
 def parse_upstox_tradebooks(files: Iterable[tuple[str, str]]) -> ImportResult:
     return parse_tradebooks(files, PROFILE)
+
+
+def load_upstox_tradebook(data: bytes, *, name: str = "tradebook",
+                        password: str | None = None) -> ImportResult:
+    """CSV or XLSX bytes."""
+    return load_tradebook(data, PROFILE, name=name, password=password)
+
+
+def load_upstox_tradebooks(files: Iterable[tuple[str, bytes]], *,
+                         password: str | None = None) -> ImportResult:
+    return load_tradebooks(files, PROFILE, password=password)

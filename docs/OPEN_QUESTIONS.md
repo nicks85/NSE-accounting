@@ -203,6 +203,24 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   password-protected with the PAN. Angel One's "trade history" (Account → Trades and charges)
   includes charges, downloadable as XLSX/XLS/CSV. Neither publishes column names.
 - **Implemented as:** no built-in layout (CLAUDE.md forbids fabricating formats). A
-  column-mapping importer takes the user's header names. XLSX must be saved as CSV for now.
+  column-mapping importer takes the user's header names. XLSX (including PAN-protected Groww
+  files) is read directly.
 - **Needed:** anonymised real exports to add built-in profiles.
+- **Status:** open.
+
+## Q-018 — XLSX reading: unverified against real broker files
+
+- **Area:** `importers/xlsx.py`.
+- **Implemented as:** a minimal reader of the sheet XML (first sheet by default). Numbers are
+  rounded to 15 significant digits, as Excel displays them; cells with date number formats
+  become ISO dates. Password-protected files are decrypted locally with msoffcrypto-tool.
+- **Known limitation:** msoffcrypto's own encrypt → decrypt round trip fails for encrypted
+  packages under about 4 KB; such files get a clear "couldn't decrypt" error. Whether real
+  Groww files hit this is unknown.
+- **Also:** report footers (totals, disclaimers) below the trades make the import fail with a
+  row error rather than being skipped. The first visible sheet is read by default (hidden
+  sheets skipped with a warning); Excel error cells and formulas without a saved value are
+  warned about. Integer cells are kept digit-for-digit; other numbers are rounded to 15
+  significant digits.
+- **Needed:** a real protected Groww XLSX and an XLSX export from Zerodha or Upstox.
 - **Status:** open.

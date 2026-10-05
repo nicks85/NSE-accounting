@@ -26,7 +26,7 @@ def test_parses_equity_rows() -> None:
 
 def test_title_case_headers_and_bom() -> None:
     header = [h.replace("_", " ").title() for h in HEADER]
-    text = "﻿" + tradebook_csv([Row("SYNTHA", "2025-05-01", "BUY", "1", "1")], header=header)
+    text = "\ufeff" + tradebook_csv([Row("SYNTHA", "2025-05-01", "BUY", "1", "1")], header=header)
     assert len(parse_zerodha_tradebook(text).trades) == 1
 
 

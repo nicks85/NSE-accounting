@@ -5,7 +5,7 @@ warnings) is common so every broker gets the same safeguards."""
 import csv
 import io
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 
 from engine.models import Segment, Side, Trade
@@ -18,6 +18,7 @@ from importers.base import (
     parse_datetime,
     parse_decimal,
 )
+from importers.xlsx import is_xlsx, read_xlsx_sheet
 
 FIELDS = ("trade_date", "side", "quantity", "price", "isin", "symbol", "segment", "exchange",
           "trade_id", "executed_at", "auction", "expiry", "strike", "option_type")
@@ -107,7 +108,53 @@ def _contract(symbol: str, expiry: str, strike: str, option_type: str, *, where:
 
 def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook") -> ImportResult:
     """Parse one CSV export. ``name`` labels warnings and errors."""
-    rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
+    try:
+        rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    except csv.Error as error:
+        raise ImportFormatError(f"{name}: not a readable CSV file ({error})") from None
+    return parse_rows(rows, profile, name=name)
+
+
+def _decode_csv(data: bytes, name: str) -> tuple[str, str | None]:
+    """Text of a CSV file, plus a warning when the encoding had to be guessed."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):  # Excel "Unicode Text" is UTF-16
+        return data.decode("utf-16"), None
+    if b"\x00" in data[:4096]:
+        raise ImportFormatError(f"{name}: binary data, not a CSV or Excel file")
+    try:
+        return data.decode("utf-8-sig"), None
+    except UnicodeDecodeError:
+        text = data.decode("cp1252", errors="replace")
+        return text, f"{name}: not UTF-8; read as Windows-1252, check names and symbols"
+
+
+def load_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradebook",
+                   password: str | None = None, sheet: str | int | None = None) -> ImportResult:
+    """Parse a CSV or XLSX file's bytes (detected from content, not the file name)."""
+    if is_xlsx(data):
+        try:
+            book = read_xlsx_sheet(data, password=password, sheet=sheet)
+        except ImportFormatError as error:
+            raise ImportFormatError(f"{name}: {error}") from None
+        result = parse_rows(book.rows, profile, name=name)
+        notes = tuple(f"{name}: {w}" for w in book.warnings)
+    else:
+        text, note = _decode_csv(data, name)
+        result = parse_tradebook(text, profile, name=name)
+        notes = (note,) if note else ()
+    return replace(result, warnings=(*result.warnings, *notes)) if notes else result
+
+
+def load_tradebooks(files: Iterable[tuple[str, bytes]], profile: BrokerProfile, *,
+                    password: str | None = None) -> ImportResult:
+    """Load several CSV/XLSX files given as (name, bytes); identical trades count once."""
+    parts = [load_tradebook(data, profile, name=name, password=password) for name, data in files]
+    return merge_results(parts, profile.source, profile.confirmed)
+
+
+def parse_rows(rows: list[list[str]], profile: BrokerProfile, *, name: str = "tradebook"
+               ) -> ImportResult:
+    """Parse rows of cell text (from CSV or XLSX)."""
     if not any(any(c.strip() for c in row) for row in rows):
         raise ImportFormatError(f"{name}: file is empty")
     try:
