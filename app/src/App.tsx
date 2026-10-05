@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { rpc } from "./engine";
+import { ReportProvider } from "./report";
 import { SessionProvider } from "./state";
 import "./styles.css";
 
@@ -33,6 +34,7 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
   const current = TABS.find((t) => t.id === tab)!;
   return (
     <SessionProvider>
+      <ReportProvider>
       <div className="shell">
         <header className="header">
           <h1>Kosh</h1>
@@ -64,6 +66,7 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
           <p role="note">Not tax advice — verify with a Chartered Accountant before filing.</p>
         </footer>
       </div>
+      </ReportProvider>
     </SessionProvider>
   );
 }

@@ -46,3 +46,14 @@ legend { font-weight: 600; padding: 0 4px; }
 label.choice { font-weight: normal; display: flex; gap: 8px; align-items: center; margin: 4px 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 12px; }
 section { margin-top: 16px; }
+.pill { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 0.8em; }
+.pill-warn { background: var(--warn-soft); color: var(--warn); border: 1px solid #e6c98a; }
+button.link { background: none; border: none; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
+.why { margin: 4px 0; padding-left: 18px; }
+.why-row td { background: #fafbfc; }
+.needs { border: 1px solid #e6c98a; background: var(--warn-soft); border-radius: 6px; padding: 8px 12px; }
+.needs .row { margin: 6px 0; }
+.note { border-left: 3px solid var(--line); padding: 4px 10px; margin: 4px 0; color: var(--muted); }
+tr.total td { font-weight: 700; }
+.source { display: block; color: var(--muted); font-size: 0.85em; }
+.source code { user-select: all; word-break: break-all; }
