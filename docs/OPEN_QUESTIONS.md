@@ -45,6 +45,19 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   where importers can get it.
 - **Status:** open.
 
+## Q-004 — Intraday netting convention for cash equity
+
+- **Area:** `engine/classify/trades.py` (flagged `UNVERIFIED_INTRADAY_NETTING`).
+- **Implemented as:** for each scrip and day, the smaller of total bought and total sold is
+  intraday (speculative, s.43(5)); the rest is delivery. Intraday units are taken from the
+  earliest trades of the day on each side. This applies even when the scrip is also held from
+  earlier (e.g. hold 100, buy 50 and sell 50 today → 50 intraday, holding unchanged).
+- **Problem:** s.43(5) defines a speculative transaction as one settled without delivery, but
+  doesn't say how to allocate units within a day. Brokers' Tax P&L reports use this netting,
+  and exchange settlement nets the same way, but no CBDT citation has been found.
+- **Needed:** CBDT circular / ruling or CA confirmation.
+- **Status:** open.
+
 ## Q-005 — Bonus stripping (1961 Act s.94(8)) not implemented
 
 - **Area:** corporate actions / capital-gains computation.

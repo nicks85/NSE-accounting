@@ -63,13 +63,31 @@ class Trade:
             stt=apportion(self.stt, quantity, self.quantity),
         )
 
+    def split(
+        self, quantity: Decimal, head_suffix: str = "", rest_suffix: str = ""
+    ) -> "tuple[Trade, Trade | None]":
+        """Split off the first ``quantity`` units; the remainder keeps the exact leftover
+        charges and STT so the two pieces always sum to the original. Suffixes are appended
+        to the pieces' trade IDs when they must stay distinguishable."""
+        if quantity == self.quantity:
+            return replace(self, trade_id=f"{self.trade_id}{head_suffix}"), None
+        head = self.portion(quantity, head_suffix)
+        rest = replace(
+            self,
+            trade_id=f"{self.trade_id}{rest_suffix}",
+            quantity=self.quantity - quantity,
+            charges=self.charges - head.charges,
+            stt=self.stt - head.stt,
+        )
+        return head, rest
+
 
 @dataclass(frozen=True, slots=True)
 class Lot:
     """An open position, keeping the opening trade's gross value, charges and STT.
 
-    For F&O a negative ``quantity`` is a short position opened by a sell; cash equity cannot
-    be held short.
+    For F&O a negative ``quantity`` is a short position opened by a sell. Cash equity can be
+    short only within an intraday book (``intraday=True``), squared off the same day.
     """
 
     instrument: str
@@ -80,13 +98,14 @@ class Lot:
     stt: Decimal
     source_trade_id: str
     segment: Segment = Segment.EQUITY
+    intraday: bool = False
 
     def __post_init__(self) -> None:
         for name in ("quantity", "value", "charges", "stt"):
             require_decimal(name, getattr(self, name))
         if self.quantity == 0:
             raise ValueError("lot quantity must be non-zero")
-        if self.quantity < 0 and self.segment is Segment.EQUITY:
+        if self.quantity < 0 and self.segment is Segment.EQUITY and not self.intraday:
             raise ValueError(f"{self.source_trade_id}: cash-equity lot cannot be short")
         if self.value < 0 or self.charges < 0 or self.stt < 0:
             raise ValueError(f"{self.source_trade_id}: value, charges and stt must be non-negative")

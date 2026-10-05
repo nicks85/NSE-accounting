@@ -57,3 +57,18 @@ def test_lot_rejects_short_equity_and_negative_amounts() -> None:
     short = Lot("F", date(2024, 1, 1), dec(-1), dec(10), dec(0), dec(0), "T1", Segment.FNO)
     with pytest.raises(ValueError, match="no cost"):
         _ = short.cost
+
+
+def test_short_equity_lot_allowed_only_when_intraday() -> None:
+    lot = Lot("X", date(2024, 1, 1), dec(-1), dec(10), dec(0), dec(0), "T1", intraday=True)
+    assert not lot.is_long
+    with pytest.raises(ValueError, match="cannot be short"):
+        Lot("X", date(2024, 1, 1), dec(-1), dec(10), dec(0), dec(0), "T1", intraday=False)
+
+
+def test_trade_split_whole_and_suffixes() -> None:
+    t = trade("BUY", "2024-01-01", 3, 10, trade_id="T")
+    whole, none = t.split(dec(3), "#a", "#b")
+    assert whole.trade_id == "T#a" and none is None
+    head, rest = t.split(dec(1), "#a", "#b")
+    assert rest is not None and (head.trade_id, rest.trade_id) == ("T#a", "T#b")

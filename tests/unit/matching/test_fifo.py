@@ -202,3 +202,11 @@ def test_opening_lots_are_sorted_by_acquisition_date() -> None:
     assert result.disposals[0].open_trade_id == "OLD"
     [left] = result.open_lots
     assert (left.source_trade_id, left.cost) == ("NEW", dec(10))
+
+
+def test_unsquared_intraday_position_warns() -> None:
+    result = match_fifo([trade("SELL", "2024-08-01", 10, 100, trade_id="S")], allow_short=True)
+    [lot] = result.open_lots
+    assert lot.intraday and lot.quantity == dec(-10)
+    [warning] = result.warnings
+    assert "not squared off" in warning

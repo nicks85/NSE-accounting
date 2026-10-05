@@ -13,7 +13,7 @@ against older delivery lots and reported as a capital gain.
 
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -40,7 +40,10 @@ class MatchResult:
 class FifoBook:
     """Mutable per-instrument FIFO queues. Feed trades in chronological order."""
 
-    def __init__(self, opening_lots: Iterable[Lot] = ()) -> None:
+    def __init__(self, opening_lots: Iterable[Lot] = (), *, allow_short: bool = False) -> None:
+        """``allow_short`` lets cash-equity sells open short positions; used only for
+        intraday trades, which are squared off the same day."""
+        self._allow_short = allow_short
         self._lots: dict[str, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
         self._warnings: list[str] = []
@@ -53,7 +56,7 @@ class FifoBook:
     def apply(self, trade: Trade) -> None:
         is_buy = trade.side is Side.BUY
         queue = self.lots(trade.instrument)
-        if not is_buy and trade.segment is Segment.EQUITY:
+        if not is_buy and trade.segment is Segment.EQUITY and not self._allow_short:
             held = sum((lot.quantity for lot in queue if lot.is_long), Decimal(0))
             if held < trade.quantity:  # checked up front so a failed sell leaves the book intact
                 raise InsufficientHoldingsError(
@@ -67,7 +70,7 @@ class FifoBook:
                 queue.popleft()
             else:
                 queue[0] = rest
-            closing, remaining_or_none = _split_trade(remaining, abs(lot.quantity))
+            closing, remaining_or_none = remaining.split(abs(lot.quantity))
             self._disposals.append(_disposal(lot, closing))
             if remaining_or_none is None:
                 return
@@ -84,6 +87,7 @@ class FifoBook:
                 stt=remaining.stt,
                 source_trade_id=trade.trade_id,
                 segment=trade.segment,
+                intraday=self._allow_short,
             )
         )
 
@@ -101,10 +105,17 @@ class FifoBook:
 
     def result(self) -> MatchResult:
         open_lots = tuple(lot for q in self._lots.values() for lot in q)
+        warnings = list(self._warnings)
+        warnings += [
+            f"{lot.source_trade_id}: intraday position of {lot.quantity} {lot.instrument} "
+            f"opened on {lot.acquired_on} was not squared off"
+            for lot in open_lots
+            if lot.intraday
+        ]
         return MatchResult(
             disposals=tuple(self._disposals),
             open_lots=open_lots,
-            warnings=tuple(self._warnings),
+            warnings=tuple(warnings),
         )
 
 
@@ -112,13 +123,15 @@ def match_fifo(
     trades: Iterable[Trade],
     opening_lots: Iterable[Lot] = (),
     actions: Iterable[CorporateAction] = (),
+    *,
+    allow_short: bool = False,
 ) -> MatchResult:
     """Match trades FIFO, applying corporate actions on their ex-dates.
 
     Events are ordered by date; on the same date corporate actions come before trades
     (trades on the ex-date are at post-action prices). Input order is kept within a day.
     """
-    book = FifoBook(opening_lots)
+    book = FifoBook(opening_lots, allow_short=allow_short)
     events: list[tuple[date, int, Trade | CorporateAction]] = [
         (a.ex_date, 0, a) for a in actions
     ]
@@ -129,21 +142,6 @@ def match_fifo(
         else:
             book.apply_action(event)
     return book.result()
-
-
-def _split_trade(trade: Trade, quantity: Decimal) -> tuple[Trade, Trade | None]:
-    """Split ``quantity`` units off ``trade``; the remainder keeps exact leftover amounts."""
-    if quantity == trade.quantity:
-        return trade, None
-    head = trade.portion(quantity, "")
-    rest = replace(
-        trade,
-        quantity=trade.quantity - quantity,
-        price=trade.price,
-        charges=trade.charges - head.charges,
-        stt=trade.stt - head.stt,
-    )
-    return head, rest
 
 
 def _disposal(lot: Lot, closing: Trade) -> Disposal:
