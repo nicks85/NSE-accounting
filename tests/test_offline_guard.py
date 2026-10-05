@@ -60,25 +60,34 @@ def test_guard_allows_safe_imports() -> None:
         assert not any(_is_forbidden(m) for m in _imported_modules(ast.parse(src))), src
 
 
-def test_runtime_dependencies_load_no_network_modules() -> None:
-    """Importing the engine, importers, msoffcrypto (protected XLSX) and casparser (CAS PDF),
-    including casparser's parser and ISIN-database modules and an ISIN lookup, must not pull in
-    networking modules (fresh interpreter).
-    casparser-isin's update CLI (casparser_isin.cli) uses urllib.request, so this also proves
-    Kosh never loads it."""
+NETWORK_ONLY_MODULES = {"ssl", "urllib.request", "http.client", "requests", "httpx", "urllib3",
+                        "aiohttp", "casparser_isin.cli"}
+"""Modules whose only purpose is networking (or casparser-isin's update downloader). ``socket``
+itself is not listed: the standard library imports it incidentally (e.g. email.utils, pulled
+in by importlib.metadata on Python 3.12), which is not network use. Actual socket use is
+trapped below instead."""
+
+
+def test_runtime_dependencies_make_no_network_calls() -> None:
+    """In a fresh interpreter, with socket connect/DNS replaced by tripwires, import the engine,
+    importers and their dependencies (msoffcrypto for protected XLSX; casparser with its parser
+    and ISIN-database modules for CAS PDFs), run an ISIN lookup and a CAS parse. No tripwire may
+    fire and no network-only module may be loaded."""
     import subprocess
     import sys
 
     code = (
-        # Record who imports a network module, so a failure names the culprit.
-        "import sys, traceback\n"
-        "class _Spy:\n"
-        "    def find_spec(self, name, path=None, target=None):\n"
-        "        if name in {'socket', 'ssl', 'urllib.request', 'http.client'}:\n"
-        "            stack = ''.join(traceback.format_stack(limit=25))\n"
-        "            print('IMPORT ' + name + ' FROM:\\n' + stack, file=sys.stderr)\n"
-        "        return None\n"
-        "sys.meta_path.insert(0, _Spy())\n"
+        "import socket, sys, traceback\n"
+        "calls = []\n"
+        "def trip(name):\n"
+        "    def fn(*a, **k):\n"
+        "        calls.append(name + ''.join(traceback.format_stack(limit=8)))\n"
+        "        raise OSError('network disabled by offline guard')\n"
+        "    return fn\n"
+        "for name in ('getaddrinfo', 'gethostbyname', 'gethostbyname_ex', 'create_connection'):\n"
+        "    setattr(socket, name, trip(name))\n"
+        "socket.socket.connect = trip('connect')\n"
+        "socket.socket.connect_ex = trip('connect_ex')\n"
         "import engine.api, importers.zerodha, importers.upstox, importers.mapped, "
         "importers.xlsx, importers.cas, msoffcrypto, msoffcrypto.format.ooxml, casparser, "
         "casparser.parsers.cams_detailed, casparser.parsers._isin, casparser.analysis, "
@@ -87,10 +96,29 @@ def test_runtime_dependencies_load_no_network_modules() -> None:
         "isin_search('Synthetic Flexi Cap Fund', 'CAMS', 'X1', 'INF000E01011')\n"
         "from importers.cas import load_cas\n"
         "try:\n    load_cas(b'not a pdf', password='x')\nexcept Exception:\n    pass\n"
-        "bad = sorted(m for m in sys.modules if m == 'casparser_isin.cli' or m in "
-        "{'socket', 'ssl', 'urllib.request', 'http.client', 'requests', 'httpx', 'urllib3'}); "
-        "print(','.join(bad))"
+        f"bad = sorted(m for m in sys.modules if m in {sorted(NETWORK_ONLY_MODULES)!r})\n"
+        "print(','.join(bad))\n"
+        "print('\\n'.join(calls), file=sys.stderr)\n"
     )
     out = subprocess.run(  # noqa: S603 - fixed command, no user input
         [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=ROOT)
-    assert out.stdout.strip() == "", out.stderr[-4000:]
+    assert out.stdout.strip() == "", "network-only modules loaded"
+    assert out.stderr.strip() == "", f"network calls attempted:\n{out.stderr[-4000:]}"
+
+
+def test_tripwire_catches_a_connection_attempt() -> None:
+    """The guard's tripwire really fires (so a silent pass means no network use)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import socket\n"
+        "def trip(*a, **k):\n    raise OSError('network disabled by offline guard')\n"
+        "socket.getaddrinfo = trip\n"
+        "import urllib.request\n"
+        "try:\n    urllib.request.urlopen('http://example.invalid', timeout=1)\n"
+        "except Exception as e:\n    print(type(e).__name__, e)\n"
+    )
+    out = subprocess.run(  # noqa: S603 - fixed command, no user input
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert "network disabled by offline guard" in out.stdout
