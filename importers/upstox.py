@@ -1,12 +1,15 @@
 """Upstox tradebook (CSV) importer.
 
 FORMAT UNCONFIRMED (docs/OPEN_QUESTIONS.md Q-016). Upstox documents the fields of its trade
-history API: exchange, segment (EQ, FO, CD, COM, MF), quantity, trade_id, trade_date
-(YYYY-mm-dd), transaction_type (BUY, SELL), scrip_name, price, isin (EQ, MF), symbol (EQ, FO):
+history API: exchange (NSE, NFO, MCX, CDS, BMF), segment (EQ, FO, CD, COM, MF), option_type
+(CE, PE), quantity, amount, trade_id, trade_date (YYYY-mm-dd), transaction_type (BUY, SELL),
+scrip_name, strike_price, expiry (YYYY-mm-dd), price, isin (EQ, MF), symbol (EQ, FO):
 https://upstox.com/developer/api-documentation/get-historical-trades/
-The downloadable trade report is assumed to use the same names. Secondary sources also mention
-"Date", "Side", "Trade Num" and "Trade Time", accepted as aliases. Only EQ and FO rows are
-imported; charges and STT are not in the report.
+For F&O, ``symbol`` is the underlying, so the contract is built from symbol + expiry + strike +
+option type. The downloadable trade report is assumed to use the same names. Secondary sources
+mention "Date", "Side", "Trade Num" and "Trade Time", accepted as lower-priority aliases;
+without a segment column the segment is guessed from the exchange, with a warning. Only EQ and
+FO rows are imported; charges and STT are not in the report.
 """
 
 from collections.abc import Iterable
@@ -24,11 +27,14 @@ PROFILE = BrokerProfile(
         "quantity": ("quantity",),
         "price": ("price",),
         "isin": ("isin",),
-        "symbol": ("symbol", "trading_symbol"),
+        "symbol": ("symbol",),
         "segment": ("segment",),
         "exchange": ("exchange",),
         "trade_id": ("trade_id", "trade_num"),
         "executed_at": ("trade_time",),
+        "expiry": ("expiry",),
+        "strike": ("strike_price",),
+        "option_type": ("option_type",),
     },
     required=("trade_date", "side", "quantity", "price", "isin", "symbol", "exchange",
               "trade_id"),
@@ -42,6 +48,8 @@ PROFILE = BrokerProfile(
         "overstates gains.",
     ),
     question="Q-016",
+    infer_segment=True,
+    compose_contract=True,
 )
 
 

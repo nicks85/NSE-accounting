@@ -20,11 +20,13 @@ from importers.base import (
 )
 
 FIELDS = ("trade_date", "side", "quantity", "price", "isin", "symbol", "segment", "exchange",
-          "trade_id", "executed_at", "auction")
+          "trade_id", "executed_at", "auction", "expiry", "strike", "option_type")
 """Canonical fields a profile can map. Required ones are listed per profile."""
 
-FNO_EXCHANGES = {"NFO", "BFO"}
-EQUITY_EXCHANGES = {"NSE", "BSE"}
+INFERRED_SEGMENTS = {"NSE": Segment.EQUITY, "BSE": Segment.EQUITY,
+                     "NFO": Segment.FNO, "BFO": Segment.FNO}
+"""Exchange → segment guess, used only by profiles that opt in and only without a segment
+column."""
 HEADER_SEARCH_ROWS = 30
 """Reports often have title rows above the header; search this many rows for it."""
 
@@ -43,25 +45,38 @@ class BrokerProfile:
     notes: tuple[str, ...]
     question: str
     """docs/OPEN_QUESTIONS.md id describing what is unconfirmed."""
+    infer_segment: bool = False
+    """When the file has no segment column, guess it from the exchange (with a warning)."""
+    compose_contract: bool = False
+    """F&O instrument = symbol + expiry + strike + option type (for files where ``symbol`` is
+    only the underlying)."""
 
 
 def _find_header(rows: list[list[str]], profile: BrokerProfile) -> tuple[int, dict[str, int]]:
     for index, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
-        names = {normalise_header(cell): i for i, cell in enumerate(row) if cell.strip()}
-        found = {
-            field: names[alias]
-            for field, aliases in profile.columns.items()
-            for alias in aliases
-            if alias in names
-        }
+        names: dict[str, list[int]] = {}
+        for i, cell in enumerate(row):
+            if cell.strip():
+                names.setdefault(normalise_header(cell), []).append(i)
+        found: dict[str, int] = {}
+        for field, aliases in profile.columns.items():
+            alias = next((a for a in aliases if a in names), None)  # first alias wins
+            if alias is not None:
+                if len(names[alias]) > 1:
+                    found[field] = -1
+                else:
+                    found[field] = names[alias][0]
         if all(field in found for field in profile.required):
+            duplicated = [f for f, i in found.items() if i < 0]
+            if duplicated:
+                raise ImportFormatError(
+                    f"header row {index + 1}: column(s) for {', '.join(duplicated)} appear more "
+                    "than once"
+                )
             return index, found
-    first = next((row for row in rows if any(c.strip() for c in row)), [])
-    missing = [f for f in profile.required
-               if not any(normalise_header(c) in profile.columns[f] for c in first)]
     raise ImportFormatError(
-        f"not a {profile.source}: missing column(s) {', '.join(missing)} "
-        f"(first row: {', '.join(first)})"
+        f"not a {profile.source}: no header row with the column(s) "
+        f"{', '.join(profile.required)} in the first {HEADER_SEARCH_ROWS} rows"
     )
 
 
@@ -76,14 +91,18 @@ def same_trade(a: Trade, b: Trade) -> bool:
     return all(getattr(a, f) == getattr(b, f) for f in fields)
 
 
-def _segment(code: str, exchange: str, profile: BrokerProfile) -> Segment | None:
-    if code:
-        return profile.segments.get(code.upper())
-    if exchange in FNO_EXCHANGES:
-        return Segment.FNO
-    if exchange in EQUITY_EXCHANGES:
-        return Segment.EQUITY
-    return None
+def _contract(symbol: str, expiry: str, strike: str, option_type: str, *, where: str) -> str:
+    """Unique F&O contract id from separate fields: SYMBOL:YYYY-MM-DD:FUT or :STRIKE:CE/PE."""
+    if not expiry:
+        raise ImportFormatError(f"{where}: missing expiry for F&O trade")
+    expiry_date = parse_date(expiry, where=f"{where} expiry").isoformat()
+    kind = option_type.upper()
+    if kind in {"CE", "PE"}:
+        strike_value = parse_decimal(strike, where=f"{where} strike").normalize()
+        return f"{symbol}:{expiry_date}:{strike_value:f}:{kind}"
+    if kind or (strike and parse_decimal(strike, where=f"{where} strike") != 0):
+        raise ImportFormatError(f"{where}: unrecognised option type {option_type!r}")
+    return f"{symbol}:{expiry_date}:FUT"
 
 
 def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook") -> ImportResult:
@@ -95,7 +114,9 @@ def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook
         header_index, columns = _find_header(rows, profile)
     except ImportFormatError as error:
         raise ImportFormatError(f"{name}: {error}") from None
-    width = max(columns.values()) + 1
+    required_width = max(columns[f] for f in profile.required) + 1
+    has_segment = "segment" in columns
+    guessed = skipped = 0
 
     trades: list[Trade] = []
     warnings: list[str] = list(profile.notes)
@@ -105,18 +126,27 @@ def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook
         if not any(cell.strip() for cell in row):
             continue
         where = f"{name} row {line_no}"
-        if len(row) < width:
-            raise ImportFormatError(f"{where}: {len(row)} columns, expected at least {width}")
+        if len(row) < required_width:
+            raise ImportFormatError(
+                f"{where}: {len(row)} columns, expected at least {required_width}")
 
         def cell(field: str, row: list[str] = row) -> str:
             index = columns.get(field)
-            return row[index].strip() if index is not None else ""
+            return row[index].strip() if index is not None and index < len(row) else ""
 
         exchange = cell("exchange").upper()
-        segment = _segment(cell("segment"), exchange, profile)
+        if has_segment:
+            code = cell("segment").upper()
+            segment = profile.segments.get(code)
+        elif profile.infer_segment:
+            code = exchange
+            segment = INFERRED_SEGMENTS.get(exchange)
+            guessed += segment is not None
+        else:  # pragma: no cover - profiles either require a segment or infer it
+            code, segment = "", None
         if segment is None:
-            code = cell("segment") or exchange
-            warnings.append(f"{where}: segment {code.upper()!r} not supported yet; row skipped")
+            warnings.append(f"{where}: segment {code!r} not supported yet; row skipped")
+            skipped += 1
             continue
         side = profile.sides.get(cell("side").upper())
         if side is None:
@@ -125,6 +155,9 @@ def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook
         instrument = cell(id_field).upper()
         if not instrument:
             raise ImportFormatError(f"{where}: missing {id_field}")
+        if segment is Segment.FNO and profile.compose_contract:
+            instrument = _contract(instrument, cell("expiry"), cell("strike"),
+                                   cell("option_type"), where=where)
         trade_number = cell("trade_id")
         if not trade_number:
             raise ImportFormatError(f"{where}: missing trade_id")
@@ -166,6 +199,15 @@ def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook
         by_key[key] = trade
         trades.append(trade)
 
+    if skipped and not trades:
+        raise ImportFormatError(
+            f"{name}: none of the {skipped} row(s) could be imported (unsupported segments); "
+            "check the segment codes"
+        )
+    if guessed:
+        warnings.append(f"{name}: no segment column; {guessed} row(s) classified as equity or "
+                        f"F&O from the exchange name, so mutual-fund or currency rows on NSE/BSE "
+                        f"may be misread ({profile.question})")
     if untimed:
         warnings.append(f"{name}: {untimed} row(s) without a readable execution time; same-day "
                         "order follows the file")

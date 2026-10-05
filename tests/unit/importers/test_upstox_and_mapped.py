@@ -15,10 +15,10 @@ def test_upstox_round_trip_to_tax() -> None:
     NIFTY future: buy 75 @24,000, sell @24,100 → F&O 7,500."""
     text = write_csv(UPSTOX_HEADER, [
         upstox_row("2025-05-02", "BUY", 100, "1000", trade_id="11"),
-        upstox_row("2025-06-03", "BUY", 75, "24000", symbol="NIFTY25JUNFUT", isin="",
-                   exchange="NFO", segment="FO", trade_id="12"),
-        upstox_row("2025-06-20", "SELL", 75, "24100", symbol="NIFTY25JUNFUT", isin="",
-                   exchange="NFO", segment="FO", trade_id="13"),
+        upstox_row("2025-06-03", "BUY", 75, "24000", symbol="NIFTY", isin="",
+                   exchange="NFO", segment="FO", trade_id="12", expiry="2025-06-26"),
+        upstox_row("2025-06-20", "SELL", 75, "24100", symbol="NIFTY", isin="",
+                   exchange="NFO", segment="FO", trade_id="13", expiry="2025-06-26"),
         upstox_row("2025-09-01", "SELL", 100, "1150", trade_id="14"),
     ])
     result = parse_upstox_tradebook(text)
@@ -31,15 +31,18 @@ def test_upstox_round_trip_to_tax() -> None:
 
 
 def test_upstox_aliases_title_rows_and_segment_from_exchange() -> None:
-    header = ["Date", "Exchange", "Symbol", "ISIN", "Side", "Quantity", "Price", "Trade Num"]
+    header = ["Date", "Exchange", "Symbol", "ISIN", "Side", "Quantity", "Price", "Trade Num",
+              "Expiry"]
     text = write_csv(header, [
-        ["2025-05-02", "NSE", "SYNTHA", "INE000A01011", "Buy", "5", "10", "1"],
-        ["2025-05-02", "NFO", "NIFTY25JUNFUT", "", "Sell", "75", "24000", "2"],
-        ["2025-05-02", "MCX", "GOLD", "", "Buy", "1", "1", "3"],
+        ["2025-05-02", "NSE", "SYNTHA", "INE000A01011", "Buy", "5", "10", "1", ""],
+        ["2025-05-02", "NFO", "NIFTY", "", "Sell", "75", "24000", "2", "2025-06-26"],
+        ["2025-05-02", "MCX", "GOLD", "", "Buy", "1", "1", "3", ""],
     ], preamble=[["Trade Report"], ["Client: SYNTHETIC"], []])
     result = parse_upstox_tradebook(text, name="upstox.csv")
     assert [t.segment for t in result.trades] == [Segment.EQUITY, Segment.FNO]
+    assert result.trades[1].instrument == "NIFTY:2025-06-26:FUT"
     assert any("upstox.csv row 7: segment 'MCX' not supported" in w for w in result.warnings)
+    assert any("classified as equity or F&O from the exchange" in w for w in result.warnings)
 
 
 def test_upstox_other_segments_skipped_and_files_merged() -> None:
@@ -53,7 +56,7 @@ def test_upstox_other_segments_skipped_and_files_merged() -> None:
 
 
 def test_wrong_file_names_missing_columns() -> None:
-    with pytest.raises(ImportFormatError, match=r"missing column.*trade_id"):
+    with pytest.raises(ImportFormatError, match=r"no header row with the column\(s\) trade_date"):
         parse_upstox_tradebook(write_csv(["Date", "Side"], [["2025-05-02", "BUY"]]))
     with pytest.raises(ImportFormatError, match="file is empty"):
         parse_upstox_tradebook("\n\n")
@@ -104,3 +107,87 @@ def test_mapped_custom_codes() -> None:
 def test_mapping_validation(mapping: dict[str, str], message: str) -> None:
     with pytest.raises(ImportFormatError, match=message):
         mapped_profile(mapping)
+
+
+
+def _fno(day: str, side: str, trade_id: str, *, strike: str, option: str) -> list[str]:
+    return upstox_row(day, side, 75, "100", symbol="BANKNIFTY", isin="", exchange="NFO",
+                      segment="FO", trade_id=trade_id, expiry="2025-06-26", strike=strike,
+                      option=option)
+
+
+def test_upstox_option_contracts_are_distinct() -> None:
+    """Same underlying, different strikes/types must not be matched against each other."""
+    result = parse_upstox_tradebook(write_csv(UPSTOX_HEADER, [
+        _fno("2025-06-02", "BUY", "1", strike="50000", option="CE"),
+        _fno("2025-06-02", "SELL", "2", strike="50000.00", option="PE"),
+        _fno("2025-06-03", "SELL", "3", strike="51000", option="CE"),
+    ]))
+    assert [t.instrument for t in result.trades] == [
+        "BANKNIFTY:2025-06-26:50000:CE", "BANKNIFTY:2025-06-26:50000:PE",
+        "BANKNIFTY:2025-06-26:51000:CE"]
+    with pytest.raises(ImportFormatError, match="missing expiry"):
+        parse_upstox_tradebook(write_csv(UPSTOX_HEADER, [
+            upstox_row("2025-06-02", "BUY", 1, "1", symbol="NIFTY", isin="", exchange="NFO",
+                       segment="FO")]))
+    with pytest.raises(ImportFormatError, match="unrecognised option type 'XX'"):
+        parse_upstox_tradebook(write_csv(UPSTOX_HEADER, [
+            _fno("2025-06-02", "BUY", "1", strike="1", option="XX")]))
+
+
+def test_alias_priority_first_alias_wins() -> None:
+    header = ["trade_date", "date", "exchange", "segment", "symbol", "isin", "transaction_type",
+              "side", "quantity", "price", "trade_id"]
+    text = write_csv(header, [["2025-05-02", "1999-01-01", "NSE", "EQ", "SYNTHA",
+                               "INE000A01011", "BUY", "SELL", "1", "1", "1"]])
+    [trade] = parse_upstox_tradebook(text).trades
+    assert (trade.trade_date.year, trade.side) == (2025, Side.BUY)
+
+
+def test_duplicate_header_names_rejected() -> None:
+    header = [*UPSTOX_HEADER, "Trade Date"]
+    with pytest.raises(ImportFormatError, match="trade_date appear more than once"):
+        parse_upstox_tradebook(write_csv(header, [[*upstox_row("2025-05-02", "BUY", 1, "1"),
+                                                   "2025-05-03"]]))
+
+
+def test_blank_segment_cell_is_skipped_not_guessed() -> None:
+    text = write_csv(UPSTOX_HEADER, [upstox_row("2025-05-02", "BUY", 1, "1", segment=""),
+                                     upstox_row("2025-05-02", "BUY", 1, "1", trade_id="2")])
+    result = parse_upstox_tradebook(text)
+    assert len(result.trades) == 1
+    assert any("segment '' not supported" in w for w in result.warnings)
+
+
+def test_all_rows_skipped_is_an_error() -> None:
+    text = write_csv(UPSTOX_HEADER, [upstox_row("2025-05-02", "BUY", 1, "1", segment="MF")])
+    with pytest.raises(ImportFormatError, match="none of the 1 row"):
+        parse_upstox_tradebook(text)
+
+
+def test_header_beyond_search_limit() -> None:
+    text = write_csv(UPSTOX_HEADER, [upstox_row("2025-05-02", "BUY", 1, "1")],
+                     preamble=[["note"]] * 31)
+    with pytest.raises(ImportFormatError, match="first 30 rows"):
+        parse_upstox_tradebook(text)
+
+
+def test_short_row_missing_only_optional_cells_is_accepted() -> None:
+    row = upstox_row("2025-05-02", "BUY", 1, "1")[:11]
+    assert len(parse_upstox_tradebook(write_csv(UPSTOX_HEADER, [row])).trades) == 1
+
+
+def test_mapping_rejects_empty_and_shared_headers_and_strips_codes() -> None:
+    with pytest.raises(ImportFormatError, match="no letters or digits"):
+        mapped_profile({**MAPPING, "symbol": " # "})
+    with pytest.raises(ImportFormatError, match="mapped to the same column"):
+        mapped_profile({**MAPPING, "symbol": "ISIN code"})
+    profile = mapped_profile({**MAPPING, "executed_at": "Deal Date"},
+                             side_codes={" buy ": Side.BUY, "s": Side.SELL})
+    assert profile.sides["BUY"] is Side.BUY
+
+
+def test_header_with_blank_column() -> None:
+    header = [*UPSTOX_HEADER[:3], "", *UPSTOX_HEADER[3:]]
+    row = upstox_row("2025-05-02", "BUY", 1, "1")
+    assert len(parse_upstox_tradebook(write_csv(header, [[*row[:3], "", *row[3:]]])).trades) == 1

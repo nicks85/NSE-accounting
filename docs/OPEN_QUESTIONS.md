@@ -187,7 +187,12 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   COM, MF) are documented for Upstox's trade-history API, not for the downloadable report
   (https://upstox.com/developer/api-documentation/get-historical-trades/). Upstox says the
   trade report downloads as Excel, CSV or PDF. Aliases "Date", "Side", "Trade Num",
-  "Trade Time" come from secondary sources.
+  "Trade Time" come from secondary sources and rank below the documented names.
+- **F&O identity:** the API's `symbol` is the underlying, so contracts are built as
+  SYMBOL:EXPIRY:FUT or SYMBOL:EXPIRY:STRIKE:CE/PE from `expiry`, `strike_price`,
+  `option_type`. If the real report has a full trading symbol instead, this needs revisiting.
+- **Segment guess:** without a segment column, NSE/BSE rows are treated as equity and NFO/BFO
+  as F&O (warned in output); mutual-fund or currency rows could be misread.
 - **Needed:** an anonymised real Upstox tradebook export.
 - **Status:** open.
 

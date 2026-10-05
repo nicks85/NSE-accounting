@@ -40,17 +40,28 @@ def mapped_profile(
     if missing:
         raise ImportFormatError(f"mapping needs: {', '.join(missing)}")
     columns = {f: (normalise_header(h),) for f, h in mapping.items() if h}
+    empty = [f for f, (name,) in columns.items() if not name]
+    if empty:
+        raise ImportFormatError(f"mapping for {', '.join(empty)} has no letters or digits")
+    by_name: dict[str, list[str]] = {}
+    for field, (name,) in columns.items():
+        by_name.setdefault(name, []).append(field)
+    shared = [fields for fields in by_name.values()
+              if len(fields) > 1 and set(fields) != {"trade_date", "executed_at"}]
+    if shared:  # one column may serve as both date and timestamp, nothing else
+        raise ImportFormatError(f"fields {', '.join(shared[0])} are mapped to the same column")
     return BrokerProfile(
         key=key,
         source=source,
         columns=columns,
         required=tuple(columns),
-        segments={k.upper(): v for k, v in (segment_codes or DEFAULT_SEGMENTS).items()},
-        sides={k.upper(): v for k, v in (side_codes or DEFAULT_SIDES).items()},
+        segments={k.strip().upper(): v for k, v in (segment_codes or DEFAULT_SEGMENTS).items()},
+        sides={k.strip().upper(): v for k, v in (side_codes or DEFAULT_SIDES).items()},
         confirmed=False,
         notes=(f"{source}: imported with a user-supplied column mapping; check the trades "
                "against the broker's statement (docs/OPEN_QUESTIONS.md Q-017).",),
         question="Q-017",
+        infer_segment=not mapping.get("segment"),
     )
 
 

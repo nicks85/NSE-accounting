@@ -16,11 +16,13 @@ def write_csv(header: list[str], rows: list[list[str]], *, preamble: list[list[s
 
 
 UPSTOX_HEADER = ["trade_date", "exchange", "segment", "scrip_name", "symbol", "isin",
-                 "transaction_type", "quantity", "price", "amount", "trade_id", "trade_time"]
+                 "transaction_type", "quantity", "price", "amount", "trade_id", "trade_time",
+                 "expiry", "strike_price", "option_type"]
 
 
 def upstox_row(day: str, side: str, qty: int, price: str, *, symbol: str = "SYNTHA",
                isin: str = "INE000A01011", exchange: str = "NSE", segment: str = "EQ",
-               trade_id: str = "1", time: str = "09:30:00") -> list[str]:
+               trade_id: str = "1", time: str = "09:30:00", expiry: str = "",
+               strike: str = "", option: str = "") -> list[str]:
     return [day, exchange, segment, f"{symbol} SYNTHETIC LTD", symbol, isin, side, str(qty),
-            price, "", trade_id, time]
+            price, "", trade_id, time, expiry, strike, option]
