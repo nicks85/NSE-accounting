@@ -59,7 +59,7 @@ def test_duplicates_and_blank_lines() -> None:
 
 @pytest.mark.parametrize(("bad", "message"), [
     ("", "tradebook: file is empty"),
-    ("symbol,isin\nX,Y\n", "missing column"),
+    ("symbol,isin\nX,Y\n", "no header row"),
 ])
 def test_rejects_wrong_files(bad: str, message: str) -> None:
     with pytest.raises(ImportFormatError, match=message):
@@ -67,7 +67,7 @@ def test_rejects_wrong_files(bad: str, message: str) -> None:
 
 
 @pytest.mark.parametrize(("row", "message"), [
-    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "tradebook row 2: trade_type 'hold'"),
+    (Row("SYNTHA", "2025-05-01", "hold", "1", "1"), "tradebook row 2: trade type 'hold'"),
     (Row("SYNTHA", "2025-05-01", "buy", "ten", "1"), "row 2 quantity: not a number"),
     (Row("SYNTHA", "05.01.2025", "buy", "1", "1"), "row 2 trade_date: unrecognised date"),
     (Row("SYNTHA", "2025-05-01", "buy", "0", "1"), "row 2: .*quantity must be positive"),
@@ -231,6 +231,9 @@ def test_short_row_and_bad_numbers() -> None:
             parse_decimal(bad, where="x")
 
 
-def test_unsupported_segment_codes_skipped() -> None:
-    result = parse_zerodha_tradebook(_csv(_line(segment="NSE_EQ"), _line(segment="FUT")))
-    assert result.trades == ()
+def test_unsupported_and_blank_segment_codes_skipped() -> None:
+    result = parse_zerodha_tradebook(_csv(_line(segment="NSE_EQ", trade_id="1"),
+                                          _line(segment="", trade_id="2"),
+                                          _line(trade_id="3")))
+    assert len(result.trades) == 1
+    assert any("segment '' not supported" in w for w in result.warnings)

@@ -179,3 +179,30 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   overstating gains.
 - **Needed:** an anonymised real tradebook export (one row per segment is enough).
 - **Status:** open.
+
+## Q-016 — Upstox tradebook format unconfirmed
+
+- **Area:** `importers/upstox.py`.
+- **Basis:** field names, date format (YYYY-mm-dd), BUY/SELL and segment codes (EQ, FO, CD,
+  COM, MF) are documented for Upstox's trade-history API, not for the downloadable report
+  (https://upstox.com/developer/api-documentation/get-historical-trades/). Upstox says the
+  trade report downloads as Excel, CSV or PDF. Aliases "Date", "Side", "Trade Num",
+  "Trade Time" come from secondary sources and rank below the documented names.
+- **F&O identity:** the API's `symbol` is the underlying, so contracts are built as
+  SYMBOL:EXPIRY:FUT or SYMBOL:EXPIRY:STRIKE:CE/PE from `expiry`, `strike_price`,
+  `option_type`. If the real report has a full trading symbol instead, this needs revisiting.
+- **Segment guess:** without a segment column, NSE/BSE rows are treated as equity and NFO/BFO
+  as F&O (warned in output); mutual-fund or currency rows could be misread.
+- **Needed:** an anonymised real Upstox tradebook export.
+- **Status:** open.
+
+## Q-017 — Groww and Angel One layouts not documented
+
+- **Area:** `importers/mapped.py`.
+- **Known:** Groww's order history downloads from Profile → Reports → Transactions as XLSX,
+  password-protected with the PAN. Angel One's "trade history" (Account → Trades and charges)
+  includes charges, downloadable as XLSX/XLS/CSV. Neither publishes column names.
+- **Implemented as:** no built-in layout (CLAUDE.md forbids fabricating formats). A
+  column-mapping importer takes the user's header names. XLSX must be saved as CSV for now.
+- **Needed:** anonymised real exports to add built-in profiles.
+- **Status:** open.
