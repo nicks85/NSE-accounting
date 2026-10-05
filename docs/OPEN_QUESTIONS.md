@@ -283,3 +283,19 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   without that carve-out. Whether listed units get 12 or 24 months under the 2025 Act needs
   confirmation.
 - **Status:** open.
+
+## Q-022 — CAS PDF → trades mapping unconfirmed
+
+- **Area:** `importers/cas.py`.
+- **Implemented as:** casparser parses the PDF; Kosh maps its transactions: purchases, SIPs,
+  switch-ins and dividend reinvestments become buys at NAV with same-day stamp duty added to
+  cost; redemptions and switch-outs become sells with same-day STT recorded. Dividend payouts,
+  TDS and informational rows are ignored. Reversals are imported at NAV with a warning. Gifts
+  and segregated portfolios are refused. A scheme whose statement opens with units is refused
+  (cost unknown: a CAS from inception is needed). Fund class is suggested from casparser's
+  EQUITY/DEBT scheme type (a guess, Q-019).
+- **Known gaps:** scheme mergers are imported as a sale and a purchase although a merger isn't
+  a transfer (1961 Act s.47(xix); cost and holding period should carry over) — warned. Whether
+  a CAS purchase "amount" already excludes stamp duty is assumed from the usual layout.
+- **Needed:** an anonymised real detailed CAS (CAMS and KFintech) to confirm the mapping.
+- **Status:** open.

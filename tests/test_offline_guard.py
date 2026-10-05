@@ -61,15 +61,19 @@ def test_guard_allows_safe_imports() -> None:
 
 
 def test_runtime_dependencies_load_no_network_modules() -> None:
-    """Importing the engine, importers and msoffcrypto (used for protected XLSX) must not pull
-    in networking modules, checked in a fresh interpreter."""
+    """Importing the engine, importers, msoffcrypto (protected XLSX) and casparser (CAS PDF),
+    and running a CAS parse, must not pull in networking modules (fresh interpreter).
+    casparser-isin's update CLI (casparser_isin.cli) uses urllib.request, so this also proves
+    Kosh never loads it."""
     import subprocess
     import sys
 
     code = (
         "import sys, engine.api, importers.zerodha, importers.upstox, importers.mapped, "
-        "importers.xlsx, msoffcrypto, msoffcrypto.format.ooxml; "
-        "bad = sorted(m for m in sys.modules if m in "
+        "importers.xlsx, importers.cas, msoffcrypto, msoffcrypto.format.ooxml, casparser; "
+        "from importers.cas import load_cas\n"
+        "try:\n    load_cas(b'not a pdf', password='x')\nexcept Exception:\n    pass\n"
+        "bad = sorted(m for m in sys.modules if m == 'casparser_isin.cli' or m in "
         "{'socket', 'ssl', 'urllib.request', 'http.client', 'requests', 'httpx', 'urllib3'}); "
         "print(','.join(bad))"
     )
