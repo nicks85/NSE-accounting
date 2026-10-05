@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ExportScreen } from "./screens/ExportScreen";
 import { GainsScreen } from "./screens/GainsScreen";
 import { HoldingsScreen } from "./screens/HoldingsScreen";
 import { ImportScreen } from "./screens/ImportScreen";
@@ -14,6 +15,7 @@ createRoot(document.getElementById("root")!).render(
         holdings: <HoldingsScreen />,
         gains: <GainsScreen />,
         losses: <LossesScreen />,
+        export: <ExportScreen />,
       }}
     />
   </StrictMode>,
