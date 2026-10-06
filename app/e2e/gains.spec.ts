@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Synthetic Zerodha tradebook (fake ISIN). Bought 1,000 @500 in 2015, sold @1,500 in Jun 2025.
 const HEADER = "symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time";

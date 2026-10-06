@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { DisclaimerGate } from "./Disclaimer";
 import { ExportScreen } from "./screens/ExportScreen";
 import { GainsScreen } from "./screens/GainsScreen";
 import { HoldingsScreen } from "./screens/HoldingsScreen";
@@ -9,6 +10,7 @@ import { LossesScreen } from "./screens/LossesScreen";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <DisclaimerGate>
     <App
       screens={{
         import: <ImportScreen />,
@@ -18,5 +20,6 @@ createRoot(document.getElementById("root")!).render(
         export: <ExportScreen />,
       }}
     />
+    </DisclaimerGate>
   </StrictMode>,
 );

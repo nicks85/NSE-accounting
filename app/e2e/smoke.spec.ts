@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test("app shell talks to the local engine and makes no external requests", async ({ page }) => {
   const external: string[] = [];

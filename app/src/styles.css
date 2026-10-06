@@ -59,3 +59,5 @@ tr.total td { font-weight: 700; }
 .source code { user-select: all; word-break: break-all; }
 .inline-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0; }
 .pill-error { background: var(--error-soft); color: var(--error); border: 1px solid #e3a3a3; }
+.disclaimer { border-top: 1px solid var(--line); border-radius: 6px; max-width: 720px; margin: 40px auto; }
+.disclaimer h1 { color: var(--accent); margin-top: 0; }

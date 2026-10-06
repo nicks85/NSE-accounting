@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Phase 4 exit: import → compute → export, in one flow, through the real engine.
 // Synthetic Zerodha tradebook (fake ISINs): a pre-2018 holding, a short-term trade and F&O.
