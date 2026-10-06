@@ -18,13 +18,28 @@ struct Engine {
 }
 
 impl Engine {
-    /// Python interpreter and working directory for the engine. Packaging a bundled interpreter
-    /// is Phase 5; until then these default to `python3` in the current directory.
+    /// The engine command: the bundled `kosh-engine` sidecar next to the app executable, or,
+    /// for development (`KOSH_ENGINE_PYTHON` set, or no sidecar built), `python -m engine.rpc`.
+    fn command() -> Command {
+        let dev_python = std::env::var("KOSH_ENGINE_PYTHON").ok();
+        let sidecar = std::env::current_exe().ok().and_then(|exe| {
+            let name = if cfg!(windows) { "kosh-engine.exe" } else { "kosh-engine" };
+            let path = exe.parent()?.join(name);
+            path.is_file().then_some(path)
+        });
+        match (dev_python, sidecar) {
+            (None, Some(path)) => Command::new(path),
+            (python, _) => {
+                let mut command = Command::new(python.unwrap_or_else(|| "python3".into()));
+                command.args(["-m", "engine.rpc"]);
+                command
+            }
+        }
+    }
+
     fn spawn() -> Result<Engine, String> {
-        let python = std::env::var("KOSH_ENGINE_PYTHON").unwrap_or_else(|_| "python3".into());
-        let mut command = Command::new(python);
+        let mut command = Engine::command();
         command
-            .args(["-m", "engine.rpc"])
             .env("PYTHONUTF8", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
