@@ -53,12 +53,16 @@ kosh/
 ## Quick start (developers)
 
 ```bash
-git clone https://github.com/<your-org>/kosh.git && cd kosh
+git clone https://github.com/nicks85/NSE-accounting.git && cd NSE-accounting
 uv sync                      # Python engine deps
 pnpm install --dir app       # UI deps
 uv run pytest                # engine tests
-pnpm --dir app tauri dev     # run desktop app locally
+pnpm --dir app dev           # UI in the browser, using the local engine
+KOSH_ENGINE_PYTHON="$(uv run which python)" pnpm --dir app tauri dev   # desktop app (needs Rust)
 ```
+
+See `CONTRIBUTING.md` for the full workflow and `docs/RELEASING.md` for releases and how to
+verify a download.
 
 ## Contributing
 
