@@ -3,8 +3,8 @@
 ## Cutting a release (maintainers)
 
 1. Make sure `main` is green in CI and `docs/OPEN_QUESTIONS.md` reflects the release.
-2. Bump the version in `pyproject.toml`, `engine/__init__.py`, `app/package.json` and
-   `app/src-tauri/tauri.conf.json`, commit, and tag: `git tag v0.1.0 && git push origin v0.1.0`.
+2. Bump the version in `pyproject.toml`, `engine/__init__.py`, `app/package.json`,
+   `app/src-tauri/Cargo.toml` and `app/src-tauri/tauri.conf.json`, commit, and tag: `git tag v0.1.0 && git push origin v0.1.0`.
 3. The **Release** workflow builds the engine and installers on Linux, macOS and Windows,
    smoke-tests the bundled engine, and attaches everything to a **draft** GitHub release with
    `SHA256SUMS` and signed build-provenance attestations.
@@ -32,7 +32,12 @@ provenance (below).
    timestamps from the commit): compare the SHA-256 of
    `app/src-tauri/binaries/kosh-engine-<target>` with the release asset of the same name.
    Full bit-for-bit reproducibility of the platform installers (DMG/MSI/AppImage) is not yet
-   verified; that is tracked as future work.
+   verified; that is tracked as future work. `app/src-tauri/Cargo.lock` must be committed (it
+   needs a machine with Rust: `cargo generate-lockfile` in `app/src-tauri`) so Rust
+   dependencies are locked too.
+
+Builds cover Linux x86_64, Windows x86_64 and macOS on Apple silicon (`macos-latest`); there is
+no Intel-Mac build yet.
 
 ## What the app never does
 

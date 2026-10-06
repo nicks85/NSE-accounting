@@ -17,7 +17,7 @@ type Response<T> = { id: number; result?: T; error?: { type: string; message: st
 
 let nextId = 1;
 
-function inTauri(): boolean {
+export function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 

@@ -15,3 +15,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # No HTTP plugin and no updater plugin: the app must make zero network calls.
 tauri = { version = "2", features = [] }
+# Native "Save as" dialog for exports (local file system only, no network).
+tauri-plugin-dialog = "2"
+base64 = "0.22"

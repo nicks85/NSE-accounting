@@ -32,8 +32,17 @@ uv run ruff check . && uv run mypy engine importers
 pnpm --dir app test              # UI unit tests
 pnpm --dir app build && pnpm --dir app exec playwright test   # E2E through the real engine
 pnpm --dir app dev               # browser UI at http://localhost:1420 (talks to the local engine)
+uv run --group build python scripts/build_engine.py   # bundled engine (needed by tauri dev/build)
 KOSH_ENGINE_PYTHON="$(uv run which python)" pnpm --dir app tauri dev   # desktop app (needs Rust)
-uv run --group build python scripts/build_engine.py   # bundled engine for packaging
+```
+
+`tauri dev` and `tauri build` need the bundled engine in `app/src-tauri/binaries/`, so build it
+first. In debug builds `KOSH_ENGINE_PYTHON` makes the app run `python -m engine.rpc` from your
+checkout instead (on Windows use the path of `.venv\Scripts\python.exe`); release builds only
+ever run the bundled engine.
+
+```bash
+uv run --group build python scripts/check_engine_binary.py   # smoke-test the bundled engine
 ```
 
 ## Workflow
