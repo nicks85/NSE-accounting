@@ -1,6 +1,6 @@
 """Smoke-test the bundled engine executable through the real stdio protocol.
 
-    uv run python scripts/check_engine_binary.py [path-to-kosh-engine]
+    uv run --group build python scripts/check_engine_binary.py [path-to-kosh-engine]
 
 Exercises every lazily-imported part (importers, CAS, XLSX decryption, ITR schemas, PDF fonts)
 so a missing hidden import or data file fails here, not on a user's machine. Also checks that
@@ -25,10 +25,24 @@ PAN = "ABCDE1234F"
 def find_binary() -> Path:
     if len(sys.argv) > 1:
         return Path(sys.argv[1])
-    found = sorted((ROOT / "app" / "src-tauri" / "binaries").glob("kosh-engine-*"))
+    from scripts.build_engine import target_triple
+
+    binaries = ROOT / "app" / "src-tauri" / "binaries"
+    found = sorted(binaries.glob(f"kosh-engine-{target_triple()}*"))
     if not found:
-        sys.exit("no engine binary built; run scripts/build_engine.py first")
+        sys.exit(f"no engine binary for {target_triple()}; run scripts/build_engine.py first")
     return found[0]
+
+
+def bundled_modules(binary: Path) -> set[str]:
+    """Python modules inside the one-file executable, read from its embedded archive."""
+    from PyInstaller.archive.readers import CArchiveReader
+
+    archive = CArchiveReader(str(binary))
+    pyz = [name for name in archive.toc if name.endswith(".pyz")]
+    if not pyz:
+        sys.exit("cannot inspect the bundle: no embedded Python archive found")
+    return set(archive.open_embedded_archive(pyz[0]).toc)
 
 
 def b64(data: bytes) -> str:
@@ -75,9 +89,9 @@ def main() -> None:
     assert itr["result"]["valid"], itr  # bundled CBDT schemas
     assert base64.b64decode(pdf["result"]["pdf_base64"]).startswith(b"%PDF"), pdf  # fonts
 
-    toc = list((ROOT / "build" / "engine" / "work").glob("*/PYZ-00.toc"))
-    if toc:
-        assert "casparser_isin.cli" not in toc[0].read_text(), "update CLI is in the bundle"
+    modules = bundled_modules(binary)
+    assert "engine.rpc" in modules, "bundle inspection found no engine modules"
+    assert "casparser_isin.cli" not in modules, "casparser-isin's update CLI is in the bundle"
     print(f"ok: {binary.name} ({binary.stat().st_size // (1024 * 1024)} MB)")
 
 

@@ -88,6 +88,7 @@ export function ExportScreen() {
   async function exportItr() {
     setBusy("itr");
     setError(null);
+    setSaved(null);
     try {
       const result = await rpc<ItrResult>("export_itr", { ...params, form: form || undefined });
       setItr(result);
@@ -102,6 +103,7 @@ export function ExportScreen() {
   async function exportPdf() {
     setBusy("pdf");
     setError(null);
+    setSaved(null);
     try {
       const result = await rpc<{ pdf_base64: string }>("export_pdf", params);
       report(await saveFile(`kosh-summary-${label}.pdf`, base64ToBytes(result.pdf_base64), "application/pdf"));

@@ -33,7 +33,7 @@ export function DisclaimerGate({ children }: { children: ReactNode }) {
           <li>Everything runs on this computer. Kosh makes no network connections and keeps no copy of your data.</li>
         </ul>
         <label className="choice">
-          <input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} />
+          <input type="checkbox" autoFocus checked={ticked} onChange={(e) => setTicked(e.target.checked)} />
           I understand that Kosh is not tax advice and that I am responsible for my return.
         </label>
         <button

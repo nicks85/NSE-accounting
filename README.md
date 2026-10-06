@@ -58,7 +58,8 @@ uv sync                      # Python engine deps
 pnpm install --dir app       # UI deps
 uv run pytest                # engine tests
 pnpm --dir app dev           # UI in the browser, using the local engine
-KOSH_ENGINE_PYTHON="$(uv run which python)" pnpm --dir app tauri dev   # desktop app (needs Rust)
+uv run --group build python scripts/build_engine.py   # bundled engine, needed by the desktop app
+pnpm --dir app tauri dev     # desktop app (needs Rust)
 ```
 
 See `CONTRIBUTING.md` for the full workflow and `docs/RELEASING.md` for releases and how to
