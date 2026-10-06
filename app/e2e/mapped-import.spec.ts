@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // Synthetic file with user-defined headers (Kosh doesn't assume a Groww/Angel One layout).
 const csv = ["Date,Type,Qty,Price,Order Id,ISIN,Exchange",
