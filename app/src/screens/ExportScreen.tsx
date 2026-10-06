@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { rpc } from "../engine";
+import { inTauri, rpc } from "../engine";
 import { useReport } from "../report";
 import { computeParams, useSession } from "../state";
 
@@ -11,8 +11,20 @@ type ItrResult = {
   json: string;
 };
 
-/** Save bytes as a file. In a browser this downloads; the desktop app's save dialog is Phase 5. */
-export function saveFile(name: string, data: BlobPart, type: string): void {
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/** Save a file: the native "Save as" dialog in the desktop app, a download in a browser.
+ *  Returns where it was saved, null if the user cancelled, or "downloaded" in a browser. */
+export async function saveFile(name: string, data: string | Uint8Array<ArrayBuffer>, type: string): Promise<string | null> {
+  if (inTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    return invoke<string | null>("save_file", { name, dataBase64: bytesToBase64(bytes) });
+  }
   const url = URL.createObjectURL(new Blob([data], { type }));
   const link = document.createElement("a");
   link.href = url;
@@ -21,6 +33,7 @@ export function saveFile(name: string, data: BlobPart, type: string): void {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  return "downloaded";
 }
 
 function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
@@ -64,8 +77,13 @@ export function ExportScreen() {
   const [busy, setBusy] = useState<"itr" | "pdf" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [itr, setItr] = useState<ItrResult | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
   const label = `FY${session.year}-${String((session.year + 1) % 100).padStart(2, "0")}`;
   const params = { ...computeParams(session), names: session.names };
+
+  function report(where: string | null) {
+    setSaved(where === null ? "Not saved — you cancelled the dialog." : where === "downloaded" ? null : `Saved to ${where}`);
+  }
 
   async function exportItr() {
     setBusy("itr");
@@ -73,7 +91,7 @@ export function ExportScreen() {
     try {
       const result = await rpc<ItrResult>("export_itr", { ...params, form: form || undefined });
       setItr(result);
-      if (result.valid) saveFile(`kosh-${result.form}-${label}-schedules.json`, result.json, "application/json");
+      if (result.valid) report(await saveFile(`kosh-${result.form}-${label}-schedules.json`, result.json, "application/json"));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -86,7 +104,7 @@ export function ExportScreen() {
     setError(null);
     try {
       const result = await rpc<{ pdf_base64: string }>("export_pdf", params);
-      saveFile(`kosh-summary-${label}.pdf`, base64ToBytes(result.pdf_base64), "application/pdf");
+      report(await saveFile(`kosh-summary-${label}.pdf`, base64ToBytes(result.pdf_base64), "application/pdf"));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -137,6 +155,7 @@ export function ExportScreen() {
         </button>
       </section>
 
+      {saved && <p role="status">{saved}</p>}
       {error && <div className="error" role="alert">Export failed: {error}</div>}
     </div>
   );

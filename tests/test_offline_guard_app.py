@@ -8,6 +8,8 @@ from pathlib import Path
 APP = Path(__file__).resolve().parent.parent / "app"
 TAURI = APP / "src-tauri"
 NETWORK_PLUGINS = ("http", "updater", "websocket", "upload", "shell", "opener")
+ALLOWED_PLUGINS = {"dialog"}
+"""Tauri plugins reviewed as local-only. Anything else fails until reviewed and added here."""
 
 
 def test_cargo_has_no_network_plugins() -> None:
@@ -45,3 +47,15 @@ def test_no_updater_configured() -> None:
     conf = json.loads((TAURI / "tauri.conf.json").read_text())
     assert "updater" not in conf.get("plugins", {})
     assert not conf["bundle"].get("createUpdaterArtifacts")
+
+
+def test_only_reviewed_tauri_plugins() -> None:
+    deps = tomllib.loads((TAURI / "Cargo.toml").read_text())["dependencies"]
+    plugins = {d.removeprefix("tauri-plugin-") for d in deps if d.startswith("tauri-plugin-")}
+    unreviewed = plugins - ALLOWED_PLUGINS
+    assert not unreviewed, f"unreviewed Tauri plugins (check they're local-only): {unreviewed}"
+    pkg = json.loads((APP / "package.json").read_text())
+    js = {d.removeprefix("@tauri-apps/plugin-")
+          for d in {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+          if d.startswith("@tauri-apps/plugin-")}
+    assert not js - ALLOWED_PLUGINS, f"unreviewed Tauri JS plugins: {js - ALLOWED_PLUGINS}"

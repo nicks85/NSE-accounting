@@ -2,6 +2,7 @@
 //! that exchanges one JSON object per line over stdin/stdout. No network, no plugins: only the
 //! Rust standard library starts and talks to the process.
 
+use base64::Engine as _;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -111,11 +112,37 @@ async fn engine_rpc(state: tauri::State<'_, EngineState>, request: String) -> Re
     .map_err(|e| format!("engine task failed: {e}"))?
 }
 
+/// Save an export (ITR JSON or PDF) where the user chooses with the native "Save as" dialog.
+/// Returns the saved path, or None if the user cancelled. The path comes from the dialog, never
+/// from the web page, so the page can't write anywhere the user didn't pick.
+#[tauri::command]
+async fn save_file(
+    app: tauri::AppHandle,
+    name: String,
+    data_base64: String,
+) -> Result<Option<String>, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("bad file data: {e}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(chosen) = app.dialog().file().set_file_name(name).blocking_save_file() else {
+            return Ok(None);
+        };
+        let path = chosen.into_path().map_err(|e| format!("cannot save there: {e}"))?;
+        std::fs::write(&path, bytes).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|e| format!("save failed: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(EngineState::default())
-        .invoke_handler(tauri::generate_handler![engine_rpc])
+        .invoke_handler(tauri::generate_handler![engine_rpc, save_file])
         .run(tauri::generate_context!())
         .expect("error while running Kosh");
 }

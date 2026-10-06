@@ -1,8 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReportProvider } from "../report";
 import { EMPTY_SESSION, SessionProvider, useSession } from "../state";
 import { ExportScreen } from "./ExportScreen";
+
+const tauri = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke }));
 
 const REPORT = {
   tax_year: "FY 2025-26", start_year: 2025, act: "Income-tax Act, 1961",
@@ -92,5 +95,34 @@ describe("ExportScreen", () => {
     cleanup();
     await renderScreen([]);
     expect(screen.getByText("Import trades first.")).toBeTruthy();
+  });
+});
+
+describe("ExportScreen in the desktop app", () => {
+  it("saves through the native dialog and reports cancel", async () => {
+    const invoke = tauri.invoke;
+    invoke.mockImplementation(async (command: string, args: { request?: string; name?: string; dataBase64?: string }) => {
+      if (command === "engine_rpc") {
+        const request = JSON.parse(args.request!);
+        const result = request.method === "compute" ? REPORT : request.method === "unclassified_funds" ? { isins: [] }
+          : { pdf_base64: btoa("%PDF-1.4") };
+        return JSON.stringify({ id: request.id, result });
+      }
+      return invoke.mock.calls.filter((c) => c[0] === "save_file").length === 1 ? "/Users/x/kosh-summary-FY2025-26.pdf" : null;
+    });
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      await renderScreen();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download PDF summary" })));
+      await waitFor(() => expect(invoke.mock.calls.some((c) => c[0] === "save_file")).toBe(true));
+      const saveCall = invoke.mock.calls.find((c) => c[0] === "save_file")!;
+      expect(saveCall[1]).toMatchObject({ name: "kosh-summary-FY2025-26.pdf", dataBase64: btoa("%PDF-1.4") });
+      expect((await screen.findByText(/Saved to/)).textContent).toMatch("Saved to /Users/x/kosh-summary-FY2025-26.pdf");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download PDF summary" })));
+      expect(await screen.findByText(/you cancelled the dialog/)).toBeTruthy();
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      invoke.mockReset();
+    }
   });
 });
