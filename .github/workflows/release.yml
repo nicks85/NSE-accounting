@@ -1,0 +1,96 @@
+name: Release
+
+# Builds signed-provenance installers when a version tag (v*) is pushed and attaches them to a
+# DRAFT GitHub release for a maintainer to review and publish. See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reproducible timestamps from the tagged commit
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: uv sync --locked --group build
+      - run: uv run pytest -q
+      - name: Build the bundled engine
+        run: uv run --group build python scripts/build_engine.py
+      - name: Smoke-test the bundled engine
+        run: uv run python scripts/check_engine_binary.py
+      - run: pnpm --dir app install --frozen-lockfile
+      - name: Build installers
+        run: pnpm --dir app tauri build
+        env:
+          # Optional OS code signing: only used when the maintainer has added these secrets.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist
+          find app/src-tauri/target/release/bundle -type f \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' -o -name '*.deb' \
+               -o -name '*.AppImage' -o -name '*.rpm' \) -exec cp {} dist/ \;
+          cp app/src-tauri/binaries/kosh-engine-* dist/
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the draft release
+      id-token: write       # sign build-provenance attestations (Sigstore, no stored keys)
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "Kosh $GITHUB_REF_NAME" \
+            --notes "Draft — review before publishing. Verify downloads with SHA256SUMS and 'gh attestation verify <file> --repo $GITHUB_REPOSITORY' (see docs/RELEASING.md). Not tax advice."
