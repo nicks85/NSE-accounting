@@ -206,10 +206,11 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Known:** Groww's order history downloads from Profile → Reports → Transactions as XLSX,
   password-protected with the PAN. Angel One's "trade history" (Account → Trades and charges)
   includes charges, downloadable as XLSX/XLS/CSV. Neither publishes column names.
-- **Implemented as:** no built-in layout (CLAUDE.md forbids fabricating formats). A
+- **Implemented as:** no built-in Groww layout (CLAUDE.md forbids fabricating formats). A
   column-mapping importer takes the user's header names. XLSX (including PAN-protected Groww
-  files) is read directly.
-- **Needed:** anonymised real exports to add built-in profiles.
+  files) is read directly. **Angel One** now has a built-in importer
+  (`importers/angel_one.py`), built from a real export; see Q-030.
+- **Needed:** an anonymised Groww export to add a built-in profile.
 - **Status:** open.
 
 ## Q-018 — XLSX reading: unverified against real broker files
@@ -420,6 +421,15 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   per-row charges matches the summary within ₹0.10 (the summary is rounded).
 - **Still unknown:** how F&O contracts are written in Scrip/Contract; the Order Type and
   Segment values for intraday and F&O.
+- **Implemented as (2026-10-07):** `importers/angel_one.py` imports Segment `CAPITAL` rows
+  (any Order Type other than "Delivery" is imported with a warning, and same-day round trips
+  are treated as intraday by the classifier); other segments are skipped with a warning.
+  Without an ISIN column, scrips are keyed `NAME:<scrip name>` (brief 0002); names that look
+  like an ETF or fund get a warning. Truncation to about 20 characters means two companies
+  with the same shortened name would be treated as one (not seen in practice; the bundled
+  company list of brief 0001 task 11 resolves it). The per-row charges
+  are compared with "Total Trade Charges" (₹1 tolerance), and non-trade charges such as DP
+  charges are listed but not deducted (Q-027).
 - **Status:** open (needs an anonymised excerpt).
 
 ## Q-031 — Reporting when a sale is excluded for missing purchase history
@@ -468,4 +478,18 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   2025 Act sections are not yet found.
 - **Proposed:** detect buyback sales (tender-offer rows) and flag them. Do not treat them as
   ordinary sales until the rule is implemented with citations.
+- **Status:** open.
+
+## Q-035 — ETFs imported without an ISIN
+
+- **Area:** `importers/angel_one.py` (`FUND_LIKE`); decision brief 0002.
+- **Problem:** Kosh tells an ETF or fund from a share by its ISIN (`INF…`). A broker file with
+  no ISIN (Angel One trade history) imports every scrip as `NAME:<scrip>`, which the engine
+  treats as a listed share: equity rates and the ₹1.25 lakh exemption. That is wrong for gold,
+  debt, liquid and international ETFs (Q-024), and only right for equity ETFs if they meet the
+  equity-oriented test.
+- **Implemented as:** a warning, not a guess. Names containing ETF, BEES, FUND, GOLD, SILVER,
+  LIQUID, MON100 or MAFANG anywhere are flagged; the figures are not changed.
+- **Resolves when:** the bundled company list (brief 0001 task 11) supplies the ISIN, after
+  which the existing fund-class question on the Gains screen applies.
 - **Status:** open.
