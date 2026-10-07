@@ -87,3 +87,7 @@ Exit: Playwright E2E covers import → compute → export.
 - A change would add any network capability.
 - You need real broker sample files (ask for anonymised ones; never fabricate their format —
   check public broker docs or ask).
+- Before starting any new feature or changing a user-facing workflow: write a short
+  decision brief in docs/decisions/NNNN-<topic>.md (problem, options, trade-offs,
+  your recommendation, open tax questions), then STOP and wait for my approval.
+  Do not write production code until I approve the brief.
