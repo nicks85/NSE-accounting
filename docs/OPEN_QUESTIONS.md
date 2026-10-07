@@ -413,9 +413,13 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   Exchange Turnover Charges, Stamp Duty, Other Charges, IPFT Charges, Order Type, Segment,
   Exchange, Order ID, Trade ID, Date. Order Type "Delivery" with Segment "CAPITAL" = cash
   delivery. The price is in Buy Price for buys and Sell Price for sells. No ISIN column.
-- **Unknown:** date format; how F&O contracts are written in Scrip/Contract; the position and
-  label of the "Total Charges" summary; whether a row is one trade or one aggregated order;
-  the Order Type values for intraday.
+- **Confirmed from the user's own file (2026-10-07; file not committed):** date is
+  `YYYY-MM-DD` with no time; one row per trade (fill), several rows per Order ID; the "Charges
+  Summary" block (Total Trades = orders, Total Charges, Total Trade Charges, Total Non Trade
+  Charges) and per-kind breakdowns sit above the "TradeBook And Charges" title; the sum of
+  per-row charges matches the summary within ₹0.10 (the summary is rounded).
+- **Still unknown:** how F&O contracts are written in Scrip/Contract; the Order Type and
+  Segment values for intraday and F&O.
 - **Status:** open (needs an anonymised excerpt).
 
 ## Q-031 — Reporting when a sale is excluded for missing purchase history
@@ -439,3 +443,29 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   must be checked before redistributing a derived list. The list has current names only.
 - **Proposed fallback:** user confirmation of each new name, remembered in the ledger.
 - **Status:** open (not a tax rule; data licensing).
+
+## Q-033 — Rights entitlements (RE) and "Adjustment" lots
+
+- **Area:** planned Angel One importers; decision brief 0001.
+- **Observed:** the Angel One Tax P&L lists rights-entitlement ISINs (`…-RE`) with zero buy
+  and sell values (entitlements that lapsed), and "Adjustment" lots with zero values.
+- **Unknown:**
+  - the tax treatment of a renounced or lapsed rights entitlement, and the cost of shares
+    acquired by exercising one (1961 s.55(2)(aa); 2025 Act section not yet found);
+  - what Angel One's "Adjustment" represents.
+- **Proposed:** import such rows as information only, listed with a warning, until the rule is
+  cited.
+- **Status:** open.
+
+## Q-034 — Share buybacks from 1-Oct-2024
+
+- **Area:** classification; decision brief 0001.
+- **Observed:** from FY 2025-26 the Angel One Tax P&L reports delivery P&L "for Buyback"
+  separately.
+- **Believed (to verify):** from 1-Oct-2024 the buyback amount is taxed as a dividend in the
+  shareholder's hands. The cost of the shares bought back is allowed as a capital loss. The
+  1961 Act provisions are s.2(22)(f) and s.46A as amended by Finance (No. 2) Act 2024; the
+  2025 Act sections are not yet found.
+- **Proposed:** detect buyback sales (tender-offer rows) and flag them. Do not treat them as
+  ordinary sales until the rule is implemented with citations.
+- **Status:** open.

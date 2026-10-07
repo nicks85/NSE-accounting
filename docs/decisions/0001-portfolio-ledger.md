@@ -1,7 +1,8 @@
 # 0001 — Persistent portfolio ledger, first-time setup and unified import
 
-- **Status:** proposed, awaiting approval
-- **Date:** 2026-10-06
+- **Status:** proposed; questions 1, 3, 4, 5, 6 and 7 answered (see "Answers recorded"); question 2 is
+  being re-explained; awaiting approval
+- **Date:** 2026-10-06, updated 2026-10-07
 - **Scope:** engine (new `engine/ledger/`), importers, RPC, UI import/holdings/settings
 - **New open questions:** Q-026 to Q-032 in `docs/OPEN_QUESTIONS.md`
 
@@ -402,3 +403,84 @@ updated as each workflow changes.
    can apply the basic-exemption shortfall for residents?
 9. **Snapshots of filed years:** when a late import changes a year you've marked as filed,
    should Kosh only warn, or keep both the "as filed" and "revised" figures side by side?
+
+## Answers recorded (2026-10-07)
+
+| # | Answer | Effect on the plan |
+|---|---|---|
+| 1 | **Yes**, more than one person | Profiles in the schema and a profile switcher in the UI (added to task 3) |
+| 2 | Not clear yet; explained again in chat with a worked example | Task 8 is on hold until answered |
+| 3 | **Yes**, withhold the total | Task 6 as written: no year total and no export while a sale has missing purchase history, unless it is explicitly excluded |
+| 4 | **No** encryption | Plain SQLite. Backups are unencrypted; the backup screen says so. |
+| 5 | **Yes**, bundle a security master | Task 11 goes ahead. The exchanges' terms of use are checked first (Q-032). |
+| 6 | Read the user's own Angel One files in `~/Downloads` | Done. Findings are below. The files are not copied into the repo; the fixture is synthetic. |
+| 7 | Angel One **Tax P&L** files found in `~/Downloads` | Task 14 is unblocked for Angel One. Findings are below. |
+| 8, 9 | Not answered | Using my recommendations: residency as a warning only; filed years warn on change and keep the "as filed" snapshot for comparison |
+
+### Angel One trade history ("TradesAndCharges") — layout observed
+
+- **Sheet `TradesAndCharges`:** a header block comes first, with client code, download date
+  and date range.
+- **"Charges Summary":**
+  - Total Trades, which counts **orders**, not rows.
+  - Total Charges, Total Trade Charges and Total Non Trade Charges.
+- **"Trade Charges" breakdown:** Brokerage, GST, SEBI Tax, STT, Exchange Turnover Charges,
+  Stamp Duty, Other Charges, IPFT Charges.
+- **"Non Trade Charges" breakdown:** DP Charges, Interest Charges, Monthly Account
+  Maintenance, Pledge Charges, Call And Trade Charges, Margin Shortfall Penalty. This gives DP
+  charges and interest without a ledger statement (D9, Q-027).
+- **Then the "TradeBook And Charges" title** and the header row described in the brief.
+- **One row per trade (fill):** several rows can share an Order ID. Charges are given per
+  row.
+- **Date:** ISO `YYYY-MM-DD`, with no execution time. Intraday ordering within a day falls
+  back to file order (Q-004).
+- **Sample coverage:** Order Type "Delivery", Segment "CAPITAL", Exchange "NSE" only. F&O and
+  intraday values were not in the sample and stay unknown (Q-030).
+- **Charges check:**
+  - The per-row charges add up to within ₹0.10 of "Total Trade Charges". The summary is
+    rounded; for example, STT is in whole rupees.
+  - The preview compares with a ₹1 tolerance per category and warns above it.
+- **No ISIN.** Names are truncated to about 20 characters, for example "EXAMPLE DEPO SER (I)"
+  and "EXAMPLE SMALL FINANC". This confirms D7 is needed.
+
+### Angel One Tax P&L — layout observed
+
+Five sheets:
+
+- **Summary:** client details (PAN masked), financial year, ledger balances and P&L totals:
+  LTCG, STCG, buyback, intraday, futures, options, turnover, charges, STT.
+- **Equity+Bonds+SGB Trade Details:**
+  - A section of intraday rows: ISIN, Scrip Name, Qty, Transaction Date and so on.
+  - A section of delivery rows with these columns:
+    - ISIN, Scrip Name, Qty
+    - Buy Date, Sell Date
+    - Avg Buy Price, Buy Value, Avg Sell Price, Sell Value
+    - Cost Of Acquisition (the broker's grandfathered cost)
+    - Charges and Statutory Levies, STT
+    - Net Profit/Loss
+    - Long term taxable income, Short term taxable income
+    - **Purchase Type:** Normal, Bonus, Right Entitlements, Adjustment
+    - Type of instrument
+- **Derivatives Trade Details**
+- **Non Trade Charges:** Charge, Posting Date, Debit Amount, Credit Amount
+- **Dividend Report**
+
+**What this changes in the plan:**
+
+1. **Opening lots for shares already sold.** The delivery section gives the buy date and buy
+   cost of each sold lot. It can supply them for years before the first tradebook (task 14),
+   as D5 option b.
+2. **ISIN source.** For every scrip sold, the Tax P&L gives the ISIN. A trade-history sell is
+   linked to the P&L row with the same sell date, quantity and price, so its name is mapped to
+   the ISIN without fuzzy matching. That mapping still needs one confirmation. Task 11 uses
+   this before the security master.
+3. **Cross-check.** Kosh's own FIFO result per sale can be compared with the broker's figures
+   for each scrip and year, with differences listed. This is a valuable check, not a source
+   of truth.
+4. **New tax cases the engine doesn't handle yet:**
+   - "Bonus" lots, with buy price 0 and the bonus allotment date.
+   - "Right Entitlements" lots, which lapsed with zero values.
+   - "Adjustment" lots.
+   - Buyback sales, reported separately from FY 2025-26.
+
+   These go into Q-033 and Q-034.
