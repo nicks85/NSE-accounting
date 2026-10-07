@@ -261,6 +261,16 @@ def m_import(params: JSON) -> JSON:
 
         profile = zerodha.PROFILE if broker == "zerodha" else upstox.PROFILE
         result = load_tradebooks(files, profile, password=password)
+    elif broker == "angelone":
+        from importers.angel_one import load_angel_one_tradebooks
+
+        isin_map = params.get("isin_map") or {}
+        if not isinstance(isin_map, dict):
+            raise RequestError("isin_map must be an object of scrip name → ISIN")
+        angel = load_angel_one_tradebooks(
+            files, isin_map={str(k): str(v) for k, v in isin_map.items()}, password=password)
+        result = angel.result
+        names = angel.names
     elif broker == "mapped":
         from importers.mapped import mapped_profile
         from importers.tabular import load_tradebooks
