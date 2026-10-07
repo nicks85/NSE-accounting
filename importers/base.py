@@ -81,3 +81,19 @@ def parse_date(text: str, *, where: str) -> date:
         except ValueError:
             continue
     raise ImportFormatError(f"{where}: unrecognised date {text!r}")
+
+
+INDIAN_ISIN = re.compile(r"IN[A-Z0-9]{9}[0-9]", re.ASCII)
+
+
+def is_valid_isin(text: str) -> bool:
+    """An Indian ISIN (``IN`` + 9 characters + check digit) whose check digit is right
+    (ISO 6166: letters become 10-35, then the Luhn check over the digit string)."""
+    if not INDIAN_ISIN.fullmatch(text):
+        return False
+    digits = "".join(str(int(c, 36)) for c in text)
+    total = 0
+    for position, char in enumerate(reversed(digits)):
+        value = int(char) * (2 if position % 2 else 1)
+        total += value - 9 if value > 9 else value
+    return total % 10 == 0

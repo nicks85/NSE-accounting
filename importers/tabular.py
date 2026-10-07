@@ -53,8 +53,11 @@ class BrokerProfile:
     only the underlying)."""
 
 
-def _find_header(rows: list[list[str]], profile: BrokerProfile) -> tuple[int, dict[str, int]]:
-    for index, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
+def find_header(rows: list[list[str]], profile: BrokerProfile, *,
+                limit: int = HEADER_SEARCH_ROWS) -> tuple[int, dict[str, int]]:
+    """Index of the first row (within ``limit``) holding every required column, and the
+    column index of each field the profile knows."""
+    for index, row in enumerate(rows[:limit]):
         names: dict[str, list[int]] = {}
         for i, cell in enumerate(row):
             if cell.strip():
@@ -77,7 +80,7 @@ def _find_header(rows: list[list[str]], profile: BrokerProfile) -> tuple[int, di
             return index, found
     raise ImportFormatError(
         f"not a {profile.source}: no header row with the column(s) "
-        f"{', '.join(profile.required)} in the first {HEADER_SEARCH_ROWS} rows"
+        f"{', '.join(profile.required)} in the first {limit} rows"
     )
 
 
@@ -115,7 +118,7 @@ def parse_tradebook(text: str, profile: BrokerProfile, *, name: str = "tradebook
     return parse_rows(rows, profile, name=name)
 
 
-def _decode_csv(data: bytes, name: str) -> tuple[str, str | None]:
+def decode_csv(data: bytes, name: str) -> tuple[str, str | None]:
     """Text of a CSV file, plus a warning when the encoding had to be guessed."""
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):  # Excel "Unicode Text" is UTF-16
         return data.decode("utf-16"), None
@@ -139,7 +142,7 @@ def load_tradebook(data: bytes, profile: BrokerProfile, *, name: str = "tradeboo
         result = parse_rows(book.rows, profile, name=name)
         notes = tuple(f"{name}: {w}" for w in book.warnings)
     else:
-        text, note = _decode_csv(data, name)
+        text, note = decode_csv(data, name)
         result = parse_tradebook(text, profile, name=name)
         notes = (note,) if note else ()
     return replace(result, warnings=(*result.warnings, *notes)) if notes else result
@@ -158,7 +161,7 @@ def parse_rows(rows: list[list[str]], profile: BrokerProfile, *, name: str = "tr
     if not any(any(c.strip() for c in row) for row in rows):
         raise ImportFormatError(f"{name}: file is empty")
     try:
-        header_index, columns = _find_header(rows, profile)
+        header_index, columns = find_header(rows, profile)
     except ImportFormatError as error:
         raise ImportFormatError(f"{name}: {error}") from None
     required_width = max(columns[f] for f in profile.required) + 1
