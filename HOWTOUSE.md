@@ -66,7 +66,7 @@ Kosh needs your **trade-by-trade history**: every buy and sell. It does not need
 | **Zerodha** | Console → Reports → **Tradebook**. Choose the segment (Equity, F&O) and a date range of up to 365 days. | CSV or XLSX | One file per year. Repeat for every year and every segment. |
 | **Upstox** | Reports → **Trade report** for each financial year | CSV or XLSX | |
 | **Groww** | Profile → Reports → **Transactions**, then download the stocks order history | XLSX | The file is password-protected. The password is your PAN in CAPITALS. |
-| **Angel One** | Account → **Trades & Charges** → download trade history | CSV or XLSX | |
+| **Angel One** | Account → **Trades & Charges** → download trade history | XLSX (the file is usually named `Trades_History.xlsx`) | Includes charges and STT per trade. Has no ISIN; Kosh tracks companies by name. |
 | **Mutual funds** | The **Detailed** Consolidated Account Statement (CAS) from CAMS or KFintech, covering the period **since inception** | PDF | You set the password when you request it, usually your PAN. Request the "Detailed" statement, not the summary. |
 
 ### What the tradebook does **not** contain
@@ -90,14 +90,29 @@ Some events never appear in a tradebook. Check for them yourself:
 1. **Choose the source:**
    - **Zerodha tradebook**
    - **Upstox tradebook**
-   - **Groww, Angel One or other (map columns)**
+   - **Angel One trade history**
+   - **Groww or other (map columns)**
    - **Mutual fund CAS (PDF)**
 2. **Choose the file(s).** You can select several files at once, for example all your yearly
    Zerodha tradebooks for Equity and F&O.
 3. **Password**, only if the file is protected:
    - a Groww XLSX: your PAN in capitals
    - a CAS PDF: the password you set when you requested it
-4. **For Groww, Angel One or another broker, map the columns.** Open your file in Excel or
+4. **Angel One needs nothing extra.** Choose **Angel One trade history**, select your
+   `Trades_History.xlsx` file(s) and click **Import files**.
+   - **Company names:** the file has no ISIN, only shortened company names (for example
+     "EXAMPLE DEPO SER (I)"), so Kosh tracks each company by that name. Gains are worked out
+     normally.
+   - **Shares bought on or before 31-Jan-2018** can't go into the Schedule 112A export
+     without an ISIN, because the official form requires it for them; the export tells you
+     which company. Later purchases need no ISIN.
+   - **ETFs:** a name that looks like an ETF or fund (for example a gold ETF) gets a warning.
+     Without its ISIN, Kosh taxes it as an ordinary share, which is wrong for gold, debt and
+     international ETFs.
+   - **Charges check:** the per-trade charges are compared with the file's own "Total Trade
+     Charges", and Kosh warns you if they differ by more than ₹1. Charges other than STT are
+     added to the cost of buys and deducted from sale values. STT is kept separate.
+5. **For Groww or another broker, map the columns.** Open your file in Excel or
    Numbers and type the **exact column heading** for each field:
 
    | Field in Kosh | What it is | Required |
@@ -113,9 +128,9 @@ Some events never appear in a tradebook. Check for them yourself:
    | Segment | Equity, F&O and so on | |
    | Execution time | Time of the trade. It helps tell intraday trades apart. | |
 
-5. Click **Import files**. Kosh lists what it loaded: the number of trades from each file and
+6. Click **Import files**. Kosh lists what it loaded: the number of trades from each file and
    any rows it skipped, with the reason.
-6. Repeat for each source. Trades from several brokers are combined.
+7. Repeat for each source. Trades from several brokers are combined.
 
 To start over, click **Clear all**.
 
@@ -280,9 +295,15 @@ Kosh works before you use your own files.
 
 ## Current limitations
 
-- **Formats not yet confirmed.** The Groww, Angel One and Upstox formats were built from public
-  documentation and have not been tested on real files. If an import fails, please share an
-  **anonymised** sample.
+- **Formats not yet confirmed.** The Upstox format was built from public documentation and has
+  not been tested on real files. Groww needs column mapping. If an import fails, please share
+  an **anonymised** sample.
+- **Angel One: shares only.** Kosh imports cash-market (delivery and intraday) trades from the
+  Angel One trade history. F&O rows are skipped with a warning until their layout is
+  confirmed.
+- **Sales of shares bought before your first file stop the calculation.** The Gains tab shows
+  "selling … but only … held". Import the earlier years' files too. A form for entering
+  missing purchases is planned.
 - **Schedules only.** Kosh exports only the capital-gains schedules (112A and CG), not a
   complete return.
 - **UNVERIFIED rules.** Some rules are best guesses until a CA reviews them (see

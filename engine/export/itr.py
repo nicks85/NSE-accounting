@@ -185,11 +185,14 @@ def schedule_112a(report: TaxYearReport, form: str,
     for line in report.capital_gains:
         if line.manual or not line.bucket.exemption_eligible:
             continue
-        isin = isin_of(line.disposal.instrument)
-        if not ISIN_PATTERN.fullmatch(isin):
+        if line.disposal.acquired_on > GRANDFATHERING_CUTOFF:
+            after.append(line)  # one consolidated row, no ISIN needed
+            continue
+        if not ISIN_PATTERN.fullmatch(isin_of(line.disposal.instrument)):
             raise ExportError(
-                f"Schedule 112A needs an ISIN; {line.disposal.instrument!r} isn't one")
-        (before if line.disposal.acquired_on <= GRANDFATHERING_CUTOFF else after).append(line)
+                "Schedule 112A needs the ISIN of shares bought on or before 31-Jan-2018; "
+                f"{line.disposal.instrument!r} (bought {line.disposal.acquired_on}) has none")
+        before.append(line)
 
     rows: list[dict[str, Any]] = []
     unnamed: set[str] = set()

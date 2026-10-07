@@ -71,6 +71,23 @@ def test_import_zerodha_upstox_and_mapped() -> None:
     assert mapped["trades"][0]["trade_id"] == "GROWW:NSE:2025-05-01:G1"
 
 
+def test_import_angel_one_by_name_or_isin() -> None:
+    from tests.fixtures.angel_one import ISINS, SYNTH_A, Row, trades_xlsx
+
+    data = base64.b64encode(trades_xlsx(
+        [Row("SYNTHETIC ALPHA LTD", "Buy", "10", 2, "2025-05-02", "1", brokerage="1")])).decode()
+    files = [{"name": "a.xlsx", "data_base64": data}]
+    by_name = ok("import", broker="angelone", files=files)
+    assert by_name["trades"][0]["instrument"] == "NAME:SYNTHETIC ALPHA LTD"
+    assert by_name["scheme_names"] == {"NAME:SYNTHETIC ALPHA LTD": "SYNTHETIC ALPHA LTD"}
+    result = ok("import", broker="angelone", files=files, isin_map=ISINS)
+    assert result["trades"][0]["instrument"] == SYNTH_A
+    assert result["trades"][0]["charges"] == "1"
+    assert result["format_confirmed"]
+    bad = call("import", broker="angelone", files=files, isin_map=["x"])
+    assert "isin_map must be an object" in bad["error"]["message"]
+
+
 def test_import_cas_through_casparser(monkeypatch: pytest.MonkeyPatch) -> None:
     import casparser
 
