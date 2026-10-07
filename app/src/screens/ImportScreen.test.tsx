@@ -63,11 +63,27 @@ describe("ImportScreen", () => {
     expect(state().trades).toHaveLength(0);
   });
 
-  it("sends the column mapping for Groww/Angel One", async () => {
+  it("imports an Angel One file in one step and shows company names", async () => {
+    const result = { source: "Angel One trade history", format_confirmed: true,
+      trades: [{ ...TRADE, trade_id: "ANGELONE:NSE:2025-05-01:1", instrument: "NAME:SYNTH ALPHA" }],
+      warnings: ["1 company imported by name (the file has no ISIN)."],
+      suggested_classes: {}, scheme_names: { "NAME:SYNTH ALPHA": "SYNTH ALPHA" } };
+    const calls = engineReplies({ result });
+    renderScreen();
+    fireEvent.click(screen.getByLabelText("Angel One trade history"));
+    fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("t.xlsx")] } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    await screen.findByText(/Imported 1 trade from Angel One/);
+    expect(screen.queryByText(/isn't confirmed/)).toBeNull();
+    expect(calls[0].params.broker).toBe("angelone");
+    expect(state().names).toEqual({ "NAME:SYNTH ALPHA": "SYNTH ALPHA" });
+  });
+
+  it("sends the column mapping for Groww/other brokers", async () => {
     const calls = engineReplies({ result: { source: "Groww (mapped)", format_confirmed: false,
       trades: [], warnings: [], suggested_classes: {}, scheme_names: {} } });
     renderScreen();
-    fireEvent.click(screen.getByLabelText(/Groww, Angel One/));
+    fireEvent.click(screen.getByLabelText(/Groww or other/));
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("g.csv")] } });
     expect(screen.getByText(/Still needed/).textContent).toMatch(/Trade date.*ISIN or contract symbol.*exchange or segment/);
     expect((screen.getByRole("button", { name: "Import files" }) as HTMLButtonElement).disabled).toBe(true);
@@ -76,11 +92,11 @@ describe("ImportScreen", () => {
                                   ["Exchange", "Exch"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
-    fireEvent.change(screen.getByLabelText("Broker name"), { target: { value: "Angel One" } });
+    fireEvent.change(screen.getByLabelText("Broker name"), { target: { value: "Groww" } });
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("g.csv")] } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
     await screen.findByText(/Imported 0 trades/);
-    expect(calls[0].params).toMatchObject({ broker: "mapped", key: "ANGELONE", source: "Angel One (mapped)",
+    expect(calls[0].params).toMatchObject({ broker: "mapped", key: "GROWW", source: "Groww (mapped)",
                                             mapping: { trade_date: "Date" } });
   });
 

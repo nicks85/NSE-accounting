@@ -2,12 +2,13 @@ import { useState, type FormEvent } from "react";
 import { rpc } from "../engine";
 import { useSession, type FundClass, type Trade } from "../state";
 
-type Broker = "zerodha" | "upstox" | "mapped" | "cas";
+type Broker = "zerodha" | "upstox" | "angelone" | "mapped" | "cas";
 
 const SOURCES: { id: Broker; label: string; hint: string; accept: string }[] = [
   { id: "zerodha", label: "Zerodha tradebook", hint: "Console → Reports → Tradebook (CSV or XLSX). Several yearly files are fine.", accept: ".csv,.xlsx" },
   { id: "upstox", label: "Upstox tradebook", hint: "Trade report (CSV or XLSX).", accept: ".csv,.xlsx" },
-  { id: "mapped", label: "Groww, Angel One or other (map columns)", hint: "Tell Kosh which column holds each field. Groww XLSX files are protected with your PAN.", accept: ".csv,.xlsx" },
+  { id: "angelone", label: "Angel One trade history", hint: "Angel One → Account → Trades & Charges → download trade history (XLSX). Several files are fine.", accept: ".xlsx,.csv" },
+  { id: "mapped", label: "Groww or other (map columns)", hint: "Tell Kosh which column holds each field. Groww XLSX files are protected with your PAN.", accept: ".csv,.xlsx" },
   { id: "cas", label: "Mutual fund CAS (PDF)", hint: "Detailed CAS from CAMS or KFintech, covering your whole history.", accept: ".pdf" },
 ];
 
