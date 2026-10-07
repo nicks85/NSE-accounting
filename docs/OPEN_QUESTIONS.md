@@ -333,3 +333,109 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
   utility's own business-rule checks.
 - **Needed:** a test upload into the official ITR utility; CA review of line placement.
 - **Status:** open.
+
+## Q-026 — FIFO per demat account or across all accounts
+
+- **Area:** `engine/matching/fifo.py`; decision brief 0001 (D4).
+- **Rule cited:** FIFO for securities held in demat form — 1961 Act s.45(2A), 2025 Act
+  s.67(7)(c) (`FIFO` citation).
+- **Problem:** the matcher runs FIFO per instrument across every imported file. The rule is
+  commonly read as applying **within each demat account**: a sale from account B is matched
+  only against purchases into account B. With two brokers, the two readings give different
+  cost and holding period for the same sale. Moves between one's own accounts are not
+  transfers for capital gains and should keep the original date and cost.
+- **Proposed best guess:** FIFO per demat account, `UNVERIFIED`, with a "transfer between my
+  accounts" entry that carries lots across.
+- **Needed:** CBDT circular or text confirming per-account application; CA view.
+- **Status:** open (awaiting approval of brief 0001).
+
+## Q-027 — Which charges form part of cost and transfer expenses
+
+- **Area:** `engine/models.py` (`Trade.charges`); decision brief 0001 (D8).
+- **Implemented today:** all non-STT charges on a trade (brokerage, GST, exchange turnover,
+  SEBI fee, stamp duty) are added to cost on buys and treated as transfer expenses on sells
+  (1961 s.48(i),(ii); 2025 s.72(1)). STT is excluded (1961 s.48 proviso; 2025 s.72(3)(b)).
+- **Open points:**
+  1. GST on brokerage and stamp duty on the buyer: part of the cost of acquisition? (Best
+     guess: yes.)
+  2. DP charges, debited per scrip on sell days and visible only in the ledger statement:
+     transfer expenses of that sale? (Best guess: yes, but only if the user applies them from
+     the ledger statement; `UNVERIFIED`.)
+  3. For intraday and F&O (business income), all charges including STT as deductible business
+     expenses — STT under 1961 s.36(1)(xv) / 2025 s.32(k) is cited; the other charges are
+     assumed deductible under the general business-expenditure provision (section not yet
+     cited).
+- **Status:** open.
+
+## Q-028 — What residency status changes
+
+- **Area:** new per-year setting; decision brief 0001 (D10).
+- **Believed (to verify against both Acts):**
+  1. The basic-exemption shortfall may reduce special-rate capital gains only for a
+     **resident** individual or HUF (1961: s.111A(1) proviso, s.112(1) proviso, s.112A(2) —
+     to verify; 2025 Act sections — not yet found).
+  2. The rebate under s.87A (1961) is for resident individuals only; 2025 Act section not
+     yet found.
+  3. Rates of 20% (STCG on STT-paid equity) and 12.5% (LTCG), and the ₹1.25 lakh exemption,
+     apply equally to non-residents (to verify).
+  4. Tax is deducted at source on payments of capital gains to non-residents (1961 s.195;
+     2025 Act section not yet found).
+  5. Residents but not ordinarily resident are treated like residents for Indian listed
+     securities (to verify).
+- **Proposed:** status per tax year as a user input (default Resident). For non-residents, the
+  effects above appear as warnings; the figures are not changed until verified.
+- **Status:** open.
+
+## Q-029 — Cost and acquisition date for holdings not bought on the exchange
+
+- **Area:** opening holdings and the "missing purchase history" form; decision brief 0001
+  (D5).
+- **Believed (1961 Act; 2025 Act sections not yet found; all to verify):**
+  - IPO allotment: cost = allotment price; date = allotment date.
+  - Bonus shares: cost nil (s.55(2)(aa)(iiia)); date = allotment date.
+  - Gift or inheritance: cost = previous owner's cost (s.49(1)); holding period includes the
+    previous owner's (s.2(42A) Explanation 1(b)); grandfathering applies by the previous
+    owner's acquisition date (to verify).
+  - ESOP shares: cost = value taxed as a perquisite on exercise (s.49(2AA)); date = exercise
+    or allotment date (to verify which).
+  - Transfer between one's own demat accounts: not a transfer; original date and cost kept
+    (see Q-026).
+- **Proposed:** the form asks "how acquired" and applies the matching rule, marked
+  `UNVERIFIED` until each item is cited.
+- **Status:** open.
+
+## Q-030 — Angel One "TradesAndCharges" layout
+
+- **Area:** planned built-in Angel One profile (`importers/`); extends Q-017.
+- **Known from a real header supplied by the user (file not committed):** sheet
+  `TradesAndCharges`; a "TradeBook And Charges" title above the header row; columns
+  Scrip/Contract, Buy/Sell, Buy Price, Sell Price, Quantity, Brokerage, GST, STT, Sebi Tax,
+  Exchange Turnover Charges, Stamp Duty, Other Charges, IPFT Charges, Order Type, Segment,
+  Exchange, Order ID, Trade ID, Date. Order Type "Delivery" with Segment "CAPITAL" = cash
+  delivery. The price is in Buy Price for buys and Sell Price for sells. No ISIN column.
+- **Unknown:** date format; how F&O contracts are written in Scrip/Contract; the position and
+  label of the "Total Charges" summary; whether a row is one trade or one aggregated order;
+  the Order Type values for intraday.
+- **Status:** open (needs an anonymised excerpt).
+
+## Q-031 — Reporting when a sale is excluded for missing purchase history
+
+- **Area:** decision brief 0001 (D5).
+- **Problem:** if the user excludes a sale whose purchase cannot be found, the gains for the
+  year are understated. The law has no "excluded" concept; the sale still has to be reported
+  with some cost.
+- **Proposed:** never assume a zero or guessed cost. Withhold the year's total while sales
+  are unresolved; on explicit exclusion, label every total, the PDF and the export as
+  "excludes N sales (₹X sale value)".
+- **Needed:** CA view on what a filer should do when cost records are genuinely lost.
+- **Status:** open.
+
+## Q-032 — Source and redistribution terms of a bundled security master
+
+- **Area:** planned `engine/data/securities.csv`; decision brief 0001 (D7).
+- **Problem:** broker files such as Angel One's have no ISIN and truncated names. A list of
+  ISINs, symbols and names would be generated at dev time from public exchange equity lists
+  and bundled (no runtime network, CLAUDE.md rule 1). The exchanges' website terms of use
+  must be checked before redistributing a derived list. The list has current names only.
+- **Proposed fallback:** user confirmation of each new name, remembered in the ledger.
+- **Status:** open (not a tax rule; data licensing).
