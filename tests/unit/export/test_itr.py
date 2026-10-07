@@ -285,10 +285,19 @@ def test_missing_fmv_and_non_isin_are_flagged() -> None:
     report = compute_tax_year(2025, [buy("2015-01-01", 10, 100), sell("2025-06-01", 10, 300)])
     export = export_itr(report, names={A: "SYNTHETIC A LTD"})
     assert any("has no 31-Jan-2018 FMV" in n.message for n in export.warnings)
-    odd = compute_tax_year(2025, [buy("2023-01-01", 1, 1, instrument="RELIANCE"),
-                                  sell("2025-06-01", 1, 2, instrument="RELIANCE")])
-    with pytest.raises(ExportError, match="needs an ISIN"):
-        export_itr(odd)
+    # Bought after 31-Jan-2018: the consolidated row needs no ISIN, so a name key exports.
+    named = compute_tax_year(2025, [buy("2023-01-01", 1, 1, instrument="NAME:SYNTH CO"),
+                                    sell("2025-06-01", 1, 2, instrument="NAME:SYNTH CO")])
+    exported = export_itr(named)
+    assert not exported.errors
+    rows = exported.schedules["Schedule112A"]["Schedule112ADtls"]
+    assert [r["ISINCode"] for r in rows] == ["INNOTREQUIRD"]
+    # Bought on or before 31-Jan-2018: the form needs the ISIN.
+    old = compute_tax_year(2025, [buy("2018-01-31", 1, 1, instrument="NAME:SYNTH CO"),
+                                  sell("2025-06-01", 1, 2, instrument="NAME:SYNTH CO")])
+    with pytest.raises(ExportError, match=r"ISIN of shares bought on or before 31-Jan-2018; "
+                                          r"'NAME:SYNTH CO' \(bought 2018-01-31\) has none"):
+        export_itr(old)
 
 
 def test_empty_report_and_slab_loss_absorbed_across_columns() -> None:
