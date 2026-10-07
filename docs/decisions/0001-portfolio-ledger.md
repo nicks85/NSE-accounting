@@ -1,7 +1,7 @@
 # 0001 — Persistent portfolio ledger, first-time setup and unified import
 
-- **Status:** proposed; questions 1, 3, 4, 5, 6 and 7 answered (see "Answers recorded"); question 2 is
-  being re-explained; awaiting approval
+- **Status:** questions 1 to 7 answered (see "Answers recorded"). The Angel One trade-history
+  importer is approved to build now; the rest awaits approval.
 - **Date:** 2026-10-06, updated 2026-10-07
 - **Scope:** engine (new `engine/ledger/`), importers, RPC, UI import/holdings/settings
 - **New open questions:** Q-026 to Q-032 in `docs/OPEN_QUESTIONS.md`
@@ -409,7 +409,7 @@ updated as each workflow changes.
 | # | Answer | Effect on the plan |
 |---|---|---|
 | 1 | **Yes**, more than one person | Profiles in the schema and a profile switcher in the UI (added to task 3) |
-| 2 | Not clear yet; explained again in chat with a worked example | Task 8 is on hold until answered |
+| 2 | **Per demat account** (after a worked example) | Task 8 goes ahead: FIFO per demat account, `UNVERIFIED` until Q-026 is confirmed |
 | 3 | **Yes**, withhold the total | Task 6 as written: no year total and no export while a sale has missing purchase history, unless it is explicitly excluded |
 | 4 | **No** encryption | Plain SQLite. Backups are unencrypted; the backup screen says so. |
 | 5 | **Yes**, bundle a security master | Task 11 goes ahead. The exchanges' terms of use are checked first (Q-032). |
