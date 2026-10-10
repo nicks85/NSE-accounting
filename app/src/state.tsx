@@ -60,6 +60,10 @@ export type Session = {
   manualBuys: ManualBuy[];
   /** Sell trade ids the user chose to leave out (missing purchase history, Q-031). */
   excluded: string[];
+  /** Start year → whether that year's return was filed by the due date (Q-011); absent = not sure. */
+  filedOnTime: Record<string, boolean>;
+  /** Bumped when something outside the inputs changes the report (marking a year filed). */
+  revision: number;
 };
 
 export const EMPTY_SESSION: Session = {
@@ -79,6 +83,8 @@ export const EMPTY_SESSION: Session = {
   unconfirmed: [],
   manualBuys: [],
   excluded: [],
+  filedOnTime: {},
+  revision: 0,
 };
 
 type Change = Partial<Session> | ((current: Session) => Partial<Session>);
@@ -118,6 +124,8 @@ export function computeParams(session: Session) {
     fmv_2018: session.fmv2018,
     brought_forward: session.broughtForward,
     excluded: session.excluded,
+    late_returns: Object.entries(session.filedOnTime).filter(([, onTime]) => !onTime).map(([year]) => Number(year)),
+    profile_id: session.profileId ?? undefined,
   };
 }
 
@@ -136,6 +144,7 @@ type SavedSettings = {
   brought_forward: LossEntry[];
   manual_buys: { trade: Trade; how: Acquired; for_trade: string }[];
   excluded: string[];
+  filed_on_time: Record<string, boolean>;
 };
 
 type Opened = LedgerState & { profile: Profile; profiles: Profile[]; settings: SavedSettings };
@@ -146,6 +155,7 @@ function toSaved(s: Session): SavedSettings {
     brought_forward: s.broughtForward,
     manual_buys: s.manualBuys.map((m) => ({ trade: m.trade, how: m.how, for_trade: m.forTrade })),
     excluded: s.excluded,
+    filed_on_time: s.filedOnTime,
   };
 }
 
@@ -155,6 +165,7 @@ function fromSaved(saved: SavedSettings): Partial<Session> {
     broughtForward: saved.brought_forward,
     manualBuys: saved.manual_buys.map((m) => ({ trade: m.trade, how: m.how, forTrade: m.for_trade })),
     excluded: saved.excluded,
+    filedOnTime: saved.filed_on_time ?? {},
   };
 }
 

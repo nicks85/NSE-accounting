@@ -26,6 +26,42 @@ function LossTable({ label, losses }: { label: string; losses: LossEntry[] }) {
   );
 }
 
+/** Was each relevant year's return filed by the due date? (Q-011; 2025 Act s.121, 1961 Act s.80) */
+function OnTime() {
+  const { session, update } = useSession();
+  const years = [...new Set([...session.broughtForward.map((l) => l.origin_year), session.year])].sort((a, b) => b - a);
+  const set = (year: number, value: string) => update((s) => {
+    const filedOnTime = { ...s.filedOnTime };
+    if (value === "") delete filedOnTime[year];
+    else filedOnTime[year] = value === "yes";
+    return { filedOnTime };
+  });
+  return (
+    <section aria-label="Returns filed on time">
+      <h3>Returns filed on time</h3>
+      <p className="muted">
+        A loss carries forward only if it was shown in a return filed by the due date. If a year’s return was late,
+        its losses can’t be set off in later years (2025 Act s.121; 1961 Act s.80). <span className="pill pill-warn"
+        title="Best guess; to be verified">UNVERIFIED Q-011</span>
+      </p>
+      {years.map((year) => {
+        const value = session.filedOnTime[year];
+        return (
+          <div key={year} className="row">
+            <label htmlFor={`on-time-${year}`}>Return for {yearLabel(year)} filed by the due date?</label>
+            <select id={`on-time-${year}`} value={value === undefined ? "" : value ? "yes" : "no"}
+              onChange={(e) => set(year, e.target.value)}>
+              <option value="">Not sure / not filed yet</option>
+              <option value="yes">Yes, on time</option>
+              <option value="no">No, filed late</option>
+            </select>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 export function LossesScreen() {
   const { session, update } = useSession();
   const state = useReport();
@@ -92,12 +128,22 @@ export function LossesScreen() {
         {error && <div className="error" role="alert">{error}</div>}
       </section>
 
+      <OnTime />
+
       {state.status === "ready" && (
         <section aria-label="Result">
           <h3>After {state.report.tax_year}</h3>
           <p className="muted">How much of each loss was used, and against what, is listed on the Gains screen under “How losses and the exemption were applied”.</p>
           {state.report.carried_forward.length === 0 ? <p>No losses to carry forward.</p>
             : <><p>Carry these forward in Schedule CFL of this year’s return:</p><LossTable label="Carried forward" losses={state.report.carried_forward} /></>}
+          {(state.report.lapsed ?? []).length > 0 && (
+            <><div className="notice">Not set off, because that year’s return was filed late (2025 Act s.121; 1961 Act s.80):</div>
+              <LossTable label="Lapsed" losses={state.report.lapsed!} /></>
+          )}
+          {(state.report.not_carried ?? []).length > 0 && (
+            <><div className="notice">This year’s return is marked as filed late, so these losses don’t carry forward:</div>
+              <LossTable label="Not carried forward" losses={state.report.not_carried!} /></>
+          )}
           {state.report.expired.length > 0 && (
             <><div className="notice">These losses are past their carry-forward period and were not used:</div>
               <LossTable label="Expired" losses={state.report.expired} /></>

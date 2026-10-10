@@ -45,6 +45,17 @@ export type Report = {
   excluded_sales: Shortfall[];
   /** Total sale value of excluded_sales (exact decimal string). */
   excluded_value: string;
+  /** Brought-forward losses not set off because their year's return was filed late (Q-011). */
+  lapsed?: Loss[];
+  /** This year's losses that don't carry forward because this year's return was filed late. */
+  not_carried?: Loss[];
+  /** Present when the report was computed for a ledger profile: the year's filing, if any. */
+  filing?: Filing | null;
+};
+/** A year marked as filed, and every figure that changed since (brief 0001 task 4). */
+export type Filing = {
+  filed_at: string; itr_form: string | null; engine_version: string;
+  changes: { item: string; filed: string | null; now: string | null }[];
 };
 /** The part of a sale with no earlier purchase to match. */
 export type Shortfall = {
@@ -64,7 +75,7 @@ const ReportContext = createContext<ReportState>({ status: "idle" });
 export function ReportProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
   const [state, setState] = useState<ReportState>({ status: "idle" });
-  const { trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded } = session;
+  const { trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, revision, profileId } = session;
   useEffect(() => {
     let current = true;
     if (trades.length === 0 && manualBuys.length === 0 && broughtForward.length === 0) {
@@ -84,7 +95,7 @@ export function ReportProvider({ children }: { children: ReactNode }) {
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when inputs change
-  }, [trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded]);
+  }, [trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, revision, profileId]);
   return <ReportContext.Provider value={state}>{children}</ReportContext.Provider>;
 }
 
@@ -128,4 +139,39 @@ export function inr(value: string): string {
 /** Quantity for display: trailing zeros after the decimal point removed ("1000" stays). */
 export function qty(value: string): string {
   return value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value;
+}
+
+const isCount = (item: string) => item.startsWith("Number of");
+
+/** The local date a year was marked filed (the engine stores UTC). */
+export function filedOn(filing: Filing): string {
+  const at = new Date(filing.filed_at);
+  return Number.isNaN(at.getTime()) ? filing.filed_at.slice(0, 10)
+    : at.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Prominent notice when a filed year's figures no longer match what was filed. */
+export function FiledChanges({ filing }: { filing: Filing | null | undefined }) {
+  if (!filing || filing.changes.length === 0) return null;
+  return (
+    <section aria-label="Changed since filing" className="error" role="alert">
+      <h3>Changed since you filed this year</h3>
+      <p>
+        This year was marked as filed on {filedOn(filing)}, and its figures have changed since — for example an
+        older tradebook changed which purchases the sales use. You may need to file a revised return; check with your CA.
+      </p>
+      <table>
+        <thead><tr><th>Figure</th><th className="num">As filed</th><th className="num">Now</th></tr></thead>
+        <tbody>
+          {filing.changes.map((c) => (
+            <tr key={c.item}>
+              <td>{c.item}</td>
+              <td className="num">{c.filed === null ? "—" : isCount(c.item) ? c.filed : inr(c.filed)}</td>
+              <td className="num">{c.now === null ? "—" : isCount(c.item) ? c.now : inr(c.now)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
 }

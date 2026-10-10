@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { inTauri, rpc } from "../engine";
-import { useReport } from "../report";
+import { FiledChanges, filedOn, useReport } from "../report";
 import { computeParams, useSession } from "../state";
 
 type ItrResult = {
@@ -71,6 +71,60 @@ function ShareNames() {
   );
 }
 
+/** Mark the year as filed, keeping its figures for comparison (brief 0001 task 4). */
+function Filing({ form, label }: { form: string; label: string }) {
+  const { session, update } = useSession();
+  const state = useReport();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (state.status !== "ready" || session.profileId === null) return null;
+  const { filing, complete } = state.report;
+  const updating = state.stale === true;
+  async function send(method: "ledger_mark_filed" | "ledger_unmark_filed") {
+    setBusy(true);
+    setError(null);
+    try {
+      // `shown`: the engine refuses if the figures on screen are no longer the current ones.
+      await rpc(method, { ...computeParams(session), itr_form: form || undefined, shown: state.status === "ready" ? state.report : undefined });
+      update((s) => ({ revision: s.revision + 1 }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+  return (
+    <section aria-label="Filing">
+      <h3>Filing</h3>
+      {filing ? (
+        <>
+          <p>
+            {label} was marked as filed on {filedOn(filing)}{filing.itr_form ? ` (${filing.itr_form})` : ""}.{" "}
+            {filing.changes.length === 0 ? "The figures still match what you filed." : "Its figures have changed since — see above."}
+          </p>
+          {confirming ? (
+            <>
+              <button type="button" disabled={busy} onClick={() => send("ledger_unmark_filed")}>Forget the filed figures</button>{" "}
+              <button type="button" onClick={() => setConfirming(false)}>Keep</button>
+            </>
+          ) : <button type="button" onClick={() => setConfirming(true)}>Unmark as filed</button>}
+        </>
+      ) : (
+        <>
+          <p className="muted">
+            After you file, mark the year as filed. Kosh keeps these figures, and if a later import or change alters them it
+            shows what changed, in case you need a revised return.
+          </p>
+          <button type="button" disabled={busy || !complete || updating} onClick={() => send("ledger_mark_filed")}>Mark {label} as filed</button>
+        </>
+      )}
+      {error && <div className="error" role="alert">{error}</div>}
+    </section>
+  );
+}
+
 export function ExportScreen() {
   const { session } = useSession();
   const reportState = useReport();
@@ -120,6 +174,7 @@ export function ExportScreen() {
   const blocked = busy !== null || missing > 0;
   return (
     <div>
+      {reportState.status === "ready" && <FiledChanges filing={reportState.report.filing} />}
       {missing > 0 && (
         <div className="notice" role="alert">
           Export is off: {missing} sale(s) are missing purchase history. Add each purchase or exclude the sale on the
@@ -165,6 +220,8 @@ export function ExportScreen() {
           {busy === "pdf" ? "Preparing…" : "Download PDF summary"}
         </button>
       </section>
+
+      <Filing form={form} label={label.replace(/^FY(\d{4})-(\d{2})$/, "FY $1-$2")} />
 
       {saved && <p role="status">{saved}</p>}
       {error && <div className="error" role="alert">Export failed: {error}</div>}
