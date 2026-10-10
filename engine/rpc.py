@@ -23,6 +23,7 @@ from engine import __version__
 from engine.api import (
     FundClass,
     LossEntry,
+    Shortfall,
     TaxYearReport,
     compute_tax_year,
     unclassified_funds,
@@ -116,6 +117,7 @@ def _compute_inputs(params: JSON) -> tuple[int, dict[str, Any]]:
                      for isin, v in params.get("fmv_2018", {}).items()},
         "fund_classes": {isin: FundClass(v) for isin, v in params.get("fund_classes", {}).items()},
         "brought_forward": _losses(params.get("brought_forward", [])),
+        "excluded": [str(t) for t in params.get("excluded", [])],
     }
 
 
@@ -153,6 +155,13 @@ def _lot(lot: Lot) -> JSON:
     return {"instrument": lot.instrument, "isin": isin_of(lot.instrument),
             "acquired_on": lot.acquired_on.isoformat(), "quantity": _s(lot.quantity),
             "cost": _s(lot.cost), "segment": lot.segment.value}
+
+
+def _shortfall(gap: Shortfall) -> JSON:
+    return {"trade_id": gap.trade_id, "instrument": gap.instrument,
+            "isin": isin_of(gap.instrument), "sold_on": gap.sold_on.isoformat(),
+            "quantity": _s(gap.quantity), "price": _s(gap.price),
+            "sale_value": _s(gap.sale_value), "segment": gap.segment.value}
 
 
 def report_to_json(report: TaxYearReport) -> JSON:
@@ -213,6 +222,10 @@ def report_to_json(report: TaxYearReport) -> JSON:
         "expired": [{"origin_year": e.origin_year, "kind": e.kind.value, "amount": _s(e.amount)}
                     for e in report.setoff.expired],
         "open_lots": [_lot(lot) for lot in report.open_lots],
+        "complete": report.complete,
+        "missing_history": [_shortfall(s) for s in report.missing_history],
+        "excluded_sales": [_shortfall(s) for s in report.excluded_sales],
+        "excluded_value": _s(report.excluded_value),
         "warnings": [{"code": n.code, "message": n.message, "question": n.question,
                       "ref": n.ref} for n in report.warnings],
     }

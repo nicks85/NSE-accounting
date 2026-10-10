@@ -14,10 +14,10 @@ from engine import __version__
 from engine.classify.business_income import BusinessIncome, business_income
 from engine.classify.capital_gains import Bucket, CapitalGainLine, Term, capital_gain_line
 from engine.classify.funds import FundClass, is_fund, isin_of
-from engine.classify.trades import classify_trades
+from engine.classify.trades import DELIVERY_SUFFIX, MANUAL_PREFIX, classify_trades
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
-from engine.matching.fifo import match_fifo
+from engine.matching.fifo import Shortfall, match_fifo
 from engine.models import Disposal, Lot, Segment, Trade
 from engine.money import ZERO
 from engine.notices import Notice
@@ -27,9 +27,11 @@ from engine.rules.rounding import round_to_ten
 from engine.rules.setoff import LossEntry, SetOffResult, set_off
 
 __all__ = [
+    "MANUAL_PREFIX",
     "FundClass",
     "LossEntry",
     "Notice",
+    "Shortfall",
     "TaxYearReport",
     "compute_tax_year",
     "compute_tax_years",
@@ -63,10 +65,25 @@ class TaxYearReport:
     open_lots: tuple[Lot, ...]
     warnings: tuple[Notice, ...]
     unverified: tuple[Citation, ...] = field(default=())
+    missing_history: tuple[Shortfall, ...] = ()
+    """Sells up to the end of this year with no purchase to match, not excluded by the user.
+    While any remain the year is incomplete: earlier ones change which lots later sales use."""
+    excluded_sales: tuple[Shortfall, ...] = ()
+    """Shortfalls in this year the user chose to leave out; totals are labelled (Q-031)."""
 
     @property
     def carried_forward(self) -> tuple[LossEntry, ...]:
         return self.setoff.carried_forward
+
+    @property
+    def excluded_value(self) -> Decimal:
+        """Total sale value of ``excluded_sales``."""
+        return sum((s.sale_value for s in self.excluded_sales), ZERO)
+
+    @property
+    def complete(self) -> bool:
+        """False while a sale is missing purchase history: no final tax figure or export."""
+        return not self.missing_history
 
 
 def _in_year(disposals: Iterable[Disposal], start_year: int) -> list[Disposal]:
@@ -82,8 +99,14 @@ def compute_tax_year(
     fmv_2018: Mapping[str, Decimal] | None = None,
     fund_classes: Mapping[str, FundClass] | None = None,
     brought_forward: Iterable[LossEntry] = (),
+    excluded: Iterable[str] = (),
 ) -> TaxYearReport:
     """Compute one tax year (``start_year`` 2024 → FY 2024-25).
+
+    A delivery sell beyond the quantity held is a ``Shortfall`` ("missing purchase history"):
+    the unmatched part is left out, never costed at zero, and the report is incomplete until
+    the user adds the purchase (a buy with a ``MANUAL_PREFIX`` trade id) or lists the sell's
+    trade id in ``excluded``.
 
     ``trades`` may span several years; history is needed for FIFO. Only disposals closed in
     the requested year are taxed. ``fmv_2018`` maps ISIN → 31-Jan-2018 FMV per share or unit
@@ -95,7 +118,8 @@ def compute_tax_year(
     action_list = [a for a in actions if a.ex_date <= year_end]
 
     classified = classify_trades(history)
-    delivery = match_fifo(classified.delivery, opening_lots, action_list)
+    delivery = match_fifo(classified.delivery, opening_lots, action_list,
+                          collect_shortfalls=True)
     intraday = match_fifo(classified.intraday, allow_short=True)
     fno = match_fifo(classified.fno)
     warnings = [
@@ -156,6 +180,35 @@ def compute_tax_year(
                "carry-forward period and was not used")
         for e in result.expired
     ]
+    excluded_ids = set(excluded)
+
+    def is_excluded(gap: Shortfall) -> bool:  # a same-day split sell keeps its own id
+        return bool({gap.trade_id, gap.trade_id.removesuffix(DELIVERY_SUFFIX)} & excluded_ids)
+
+    missing = tuple(s for s in delivery.shortfalls if not is_excluded(s))
+    left_out = tuple(s for s in delivery.shortfalls
+                     if is_excluded(s) and tax_year_of(s.sold_on) == start_year)
+    if missing:
+        warnings.append(Notice(
+            "MISSING_HISTORY",
+            f"{len(missing)} sale(s) have no earlier purchase to match "
+            f"({', '.join(sorted({s.instrument for s in missing}))}). No cost is assumed: the "
+            "tax figure is withheld until each one's purchase is added or the sale is excluded.",
+            question="Q-031"))
+    if left_out:
+        value = sum((s.sale_value for s in left_out), ZERO)  # report not built yet
+        warnings.append(Notice(
+            "EXCLUDED",
+            f"Excludes {len(left_out)} sale(s) with ₹{value:.2f} of sale value whose purchase "
+            "history is missing; gains for this year are understated by whatever those sales "
+            "made.", question="Q-031"))
+    manual = [t for t in history if t.trade_id.startswith(MANUAL_PREFIX)]
+    if manual:
+        warnings.append(Notice(
+            "MANUAL_PURCHASE",
+            f"{len(manual)} purchase(s) entered by hand; check them against contract notes. "
+            "Cost and date rules for IPO, bonus, gift, inheritance and ESOP shares are a best "
+            "guess (see docs/OPEN_QUESTIONS.md Q-029).", question="Q-029"))
     warnings.append(SCOPE_NOTE)
 
     return TaxYearReport(
@@ -169,6 +222,8 @@ def compute_tax_year(
         open_lots=delivery.open_lots,
         warnings=tuple(warnings),
         unverified=unverified,
+        missing_history=missing,
+        excluded_sales=left_out,
     )
 
 
@@ -182,12 +237,14 @@ def compute_tax_years(
     fund_classes: Mapping[str, FundClass] | None = None,
     fund_classes_by_year: Mapping[int, Mapping[str, FundClass]] | None = None,
     brought_forward: Iterable[LossEntry] = (),
+    excluded: Iterable[str] = (),
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next.
 
     A fund's class can change between years (the meaning of "specified fund" changed in
     FY 2025-26): ``fund_classes_by_year[year]`` overrides ``fund_classes`` for that year."""
     trade_list, lot_list, action_list = list(trades), list(opening_lots), list(actions)
+    excluded_list = list(excluded)
     years = sorted(start_years)
     if years and years != list(range(years[0], years[-1] + 1)):
         raise ValueError(f"tax years must be consecutive to carry losses forward: {years}")
@@ -198,7 +255,7 @@ def compute_tax_years(
                                   fmv_2018=fmv_2018,
                                   fund_classes={**(fund_classes or {}),
                                                 **(fund_classes_by_year or {}).get(year, {})},
-                                  brought_forward=carried)
+                                  brought_forward=carried, excluded=excluded_list)
         reports.append(report)
         carried = list(report.carried_forward)
     return reports

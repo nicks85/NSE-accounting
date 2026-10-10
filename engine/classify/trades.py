@@ -29,6 +29,10 @@ from engine.money import ZERO
 UNVERIFIED_INTRADAY_NETTING = True  # surfaced as a warning whenever intraday is found
 INTRADAY_SUFFIX = "#intraday"
 DELIVERY_SUFFIX = "#delivery"
+MANUAL_PREFIX = "MANUAL:"
+"""Trade-id prefix for purchases the user entered by hand (missing purchase history). Such a
+buy stands for shares already held before any imported trade, so it is always delivery and is
+never netted against a same-day sale as intraday."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +57,8 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
             fno.append(trade)
         elif trade.segment is Segment.MUTUAL_FUND:
             delivery.append(trade)  # bought from / redeemed with the fund: never intraday
+        elif trade.trade_id.startswith(MANUAL_PREFIX):
+            delivery.append(trade)
         else:
             groups.setdefault((trade.instrument, trade.trade_date), []).append(trade)
 

@@ -2,10 +2,8 @@
 Funds (fake ISINs): EQ_FUND equity-oriented, DEBT_FUND specified (>65% debt), HYBRID_FUND
 other. Year 2025 = FY 2025-26 unless noted."""
 
-import pytest
 
 from engine.api import FundClass, compute_tax_year
-from engine.matching.fifo import InsufficientHoldingsError
 from engine.rules.setoff import LossKind
 from tests.golden.helpers import (
     DEBT_FUND,
@@ -145,9 +143,15 @@ def test_m12_fifo_is_per_folio() -> None:
     assert any(w.question == "Q-020" for w in r.warnings)
 
 
-def test_m13_redeeming_more_units_than_held_fails() -> None:
-    with pytest.raises(InsufficientHoldingsError):
-        run(2025, [mf("BUY", "2025-05-01", 10, 10), mf("SELL", "2025-06-01", 11, 10)])
+def test_m13_redeeming_more_units_than_held_is_missing_history() -> None:
+    """1 of 11 units has no purchase: it is left out (never costed at zero) and the year is
+    incomplete; the 10 matched units are computed as usual (brief 0001 D5)."""
+    r = run(2025, [mf("BUY", "2025-05-01", 10, 10), mf("SELL", "2025-06-01", 11, 10)])
+    assert not r.complete
+    [gap] = r.missing_history
+    assert (gap.quantity, gap.sale_value) == (d(1), d(10))
+    assert sum(line.disposal.quantity for line in r.capital_gains) == d(10)
+    assert any(n.code == "MISSING_HISTORY" for n in r.warnings)
 
 
 def test_m14_same_day_fund_buy_and_redeem_is_not_intraday() -> None:
