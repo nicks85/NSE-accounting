@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { FiledChanges, inr, isZero, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
-import { useSession, type FundClass } from "../state";
+import { useSession, type FundClass, type Residency } from "../state";
 import { MissingHistory } from "./MissingHistory";
 
 const YEARS = [
@@ -221,6 +221,23 @@ export function GainsScreen() {
       <select id="year" value={session.year} onChange={(e) => update({ year: Number(e.target.value) })}>
         {YEARS.map((y) => <option key={y.start} value={y.start}>{y.label}</option>)}
       </select>
+      <label htmlFor="residency">Residential status for this year</label>
+      <select id="residency" value={session.residency[String(session.year)] ?? "RES"} aria-describedby="residency-hint"
+        disabled={session.profileId !== null && !session.settingsLoaded}
+        onChange={(e) => {
+          const status = e.target.value as Residency;
+          update((s) => {
+            const residency = { ...s.residency };
+            if (status === "RES") delete residency[String(s.year)];
+            else residency[String(s.year)] = status;
+            return { residency };
+          });
+        }}>
+        <option value="RES">Resident</option>
+        <option value="NOR">Resident but not ordinarily resident (RNOR)</option>
+        <option value="NRI">Non-resident</option>
+      </select>
+      <p className="muted" id="residency-hint">It changes the notes below, not the figures: the rates and the ₹1.25 lakh exemption are the same.</p>
 
       {state.status === "idle" && <p className="muted">Import trades first.</p>}
       {state.status === "loading" && <p aria-live="polite">Calculating…</p>}
