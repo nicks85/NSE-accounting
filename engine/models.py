@@ -1,11 +1,14 @@
 """Core value types shared by importers, matching, classification and rules."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
 from engine.money import ZERO, apportion, require_decimal
+
+CHARGE_KINDS = ("BROKERAGE", "GST", "EXCHANGE", "SEBI", "STAMP", "IPFT", "OTHER")
+"""Charge types other than STT, as the ledger stores them (brief 0005)."""
 
 
 class Side(StrEnum):
@@ -50,6 +53,11 @@ class Trade:
     """For a purchase that came in from another of the user's accounts (an opening holding
     "moved from another demat account"): the date it entered this account. FIFO queues by
     that date while the holding period runs from ``trade_date`` (Q-026)."""
+    charge_parts: tuple[tuple[str, Decimal], ...] = field(default=(), compare=False)
+    """``charges`` by type when the file gives them (brief 0005): pairs of a kind from
+    ``CHARGE_KINDS`` and an amount, adding up to ``charges``. Empty when not broken down.
+    Information only: matching and tax use ``charges``. A slice of a trade (``portion``,
+    ``split``) carries none, since only the whole trade's figures are on a contract note."""
 
     def __post_init__(self) -> None:
         for name in ("quantity", "price", "charges", "stt"):
@@ -58,6 +66,17 @@ class Trade:
             raise ValueError(f"{self.trade_id}: quantity must be positive")
         if self.price < 0 or self.charges < 0 or self.stt < 0:
             raise ValueError(f"{self.trade_id}: price, charges and stt must be non-negative")
+        if self.charge_parts:
+            kinds = [kind for kind, _ in self.charge_parts]
+            if any(k not in CHARGE_KINDS for k in kinds) or len(set(kinds)) != len(kinds):
+                raise ValueError(f"{self.trade_id}: charge kinds must be distinct, from "
+                                 f"{', '.join(CHARGE_KINDS)}")
+            for _, amount in self.charge_parts:
+                require_decimal("charge part", amount)
+                if amount <= 0:
+                    raise ValueError(f"{self.trade_id}: each charge by type must be positive")
+            if sum((a for _, a in self.charge_parts), ZERO) != self.charges:
+                raise ValueError(f"{self.trade_id}: charges by type don't add up to charges")
 
     @property
     def value(self) -> Decimal:
@@ -73,6 +92,7 @@ class Trade:
             quantity=quantity,
             charges=apportion(self.charges, quantity, self.quantity),
             stt=apportion(self.stt, quantity, self.quantity),
+            charge_parts=(),
         )
 
     def split(
@@ -82,7 +102,7 @@ class Trade:
         charges and STT so the two pieces always sum to the original. Suffixes are appended
         to the pieces' trade IDs when they must stay distinguishable."""
         if quantity == self.quantity:
-            return replace(self, trade_id=f"{self.trade_id}{head_suffix}"), None
+            return replace(self, trade_id=f"{self.trade_id}{head_suffix}", charge_parts=()), None
         head = self.portion(quantity, head_suffix)
         rest = replace(
             self,
@@ -90,6 +110,7 @@ class Trade:
             quantity=self.quantity - quantity,
             charges=self.charges - head.charges,
             stt=self.stt - head.stt,
+            charge_parts=(),
         )
         return head, rest
 

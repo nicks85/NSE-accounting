@@ -21,7 +21,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from engine import __version__
-from engine.api import TaxYearReport
+from engine.api import ChargesByType, TaxYearReport
 from engine.classify.funds import isin_of
 from engine.rules import PACKS
 from engine.rules.base import Act
@@ -92,8 +92,15 @@ def _table(rows: Sequence[Sequence[Any]], widths: list[float],
     return table
 
 
-def render_summary(report: TaxYearReport, *, names: Mapping[str, str] | None = None) -> bytes:
-    """Render ``report`` as a PDF and return its bytes."""
+CHARGE_LABELS = {"BROKERAGE": "Brokerage", "GST": "GST", "EXCHANGE": "Exchange charges",
+                 "SEBI": "SEBI fee", "STAMP": "Stamp duty", "IPFT": "IPFT charges",
+                 "OTHER": "Other charges", "STT": "STT"}
+
+
+def render_summary(report: TaxYearReport, *, names: Mapping[str, str] | None = None,
+                   charges: ChargesByType | None = None) -> bytes:
+    """Render ``report`` as a PDF and return its bytes. ``charges`` adds the year's charges
+    by type (brief 0005)."""
     if not report.complete:
         from engine.export.itr import ExportError, incomplete_message
 
@@ -178,6 +185,26 @@ def render_summary(report: TaxYearReport, *, names: Mapping[str, str] | None = N
                  for bl in report.business.lines]
         story.append(_table(rows, [70 * mm, 22 * mm, 22 * mm, 20 * mm, 35 * mm, 30 * mm],
                             numeric=frozenset({3, 4})))
+
+    if charges is not None and (charges.by_kind or charges.without_charges):
+        story += [_p("Charges by type on this year's trades", styles["Heading2"]),
+                  _p("Information only: the figures above use each trade's total. For capital "
+                     "gains, charges other than STT are added to a purchase's cost and deducted "
+                     "from a sale as transfer expenses; STT is not deducted. For intraday and "
+                     "F&O, charges and STT are deducted from that income. Whether GST and the "
+                     "business-income treatment are right is still to be confirmed (Q-027).",
+                     small)]
+        if charges.by_kind:
+            rows = [["Charge", "On purchases", "On sales"]]
+            rows += [[CHARGE_LABELS.get(kind, kind), inr(buys), inr(sells)]
+                     for kind, (buys, sells) in charges.by_kind.items()]
+            rows.append(["Total",
+                         inr(sum((b for b, _ in charges.by_kind.values()), Decimal(0))),
+                         inr(sum((s for _, s in charges.by_kind.values()), Decimal(0)))])
+            story.append(_table(rows, [60 * mm, 40 * mm, 40 * mm], numeric=frozenset({1, 2})))
+        for source, count in charges.without_charges.items():
+            story.append(_p(f"{count} trade(s) from {source} files have no charges in the file, "
+                            "so these gains are slightly overstated.", small))
 
     story += [_p("Warnings and assumptions", styles["Heading2"])]
     for notice in report.warnings:

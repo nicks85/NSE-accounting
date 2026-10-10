@@ -204,6 +204,9 @@ def _scheme_trades(scheme: Any, instrument: str, where: str, warnings: list[str]
                 quantity=entry.units,
                 price=entry.nav,
                 charges=entry.extra if entry.side is Side.BUY else ZERO,
+                # A purchase's extra is stamp duty; a redemption's is STT (brief 0005).
+                charge_parts=(("STAMP", entry.extra),)
+                if entry.side is Side.BUY and entry.extra else (),
                 stt=entry.extra if entry.side is Side.SELL else ZERO,
                 segment=Segment.MUTUAL_FUND,
             ))

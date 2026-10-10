@@ -27,7 +27,7 @@ from engine.classify.trades import DELIVERY_SUFFIX, OPENING_PREFIX
 from engine.ledger.dedupe import account_key, dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
 from engine.ledger.settings import ManualBuy, Settings
-from engine.models import Segment, Side, Trade, Transfer
+from engine.models import CHARGE_KINDS, Segment, Side, Trade, Transfer
 from engine.money import ZERO
 from engine.rules.setoff import LossEntry, LossKind
 
@@ -512,8 +512,8 @@ class Ledger:
              decimal_text(trade.quantity), decimal_text(trade.price), key, account,
              trade.entered_on.isoformat() if trade.entered_on else None))
         trade_row = _rowid(cursor)
-        # Charges are kept as one total until the per-charge breakdown lands (D8, task 10).
-        charges = [("OTHER", trade.charges), ("STT", trade.stt)]
+        # Charges by type when the file gives them (brief 0005), else one "other" total.
+        charges = [*(trade.charge_parts or (("OTHER", trade.charges),)), ("STT", trade.stt)]
         self._db.executemany(
             "INSERT INTO trade_charge (trade_id, kind, amount) VALUES (?, ?, ?)",
             [(trade_row, kind, decimal_text(amount)) for kind, amount in charges if amount])
@@ -1023,6 +1023,9 @@ def _trade(row: tuple[Any, ...], charges: dict[str, Decimal]) -> Trade:
         price=text_decimal(price),
         charges=sum((v for k, v in charges.items() if k != "STT"), ZERO),
         stt=charges.get("STT", ZERO),
+        # A lone "other" figure is a total that was never broken down.
+        charge_parts=tuple((k, charges[k]) for k in CHARGE_KINDS if k in charges)
+        if set(charges) - {"STT", "OTHER"} else (),
         segment=Segment(segment),
         executed_at=datetime.fromisoformat(executed_at) if executed_at else None,
         account=account,

@@ -24,7 +24,7 @@ from engine.classify.trades import (
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
 from engine.matching.fifo import Shortfall, match_fifo
-from engine.models import Disposal, Lot, Segment, Trade, Transfer
+from engine.models import CHARGE_KINDS, Disposal, Lot, Segment, Side, Trade, Transfer
 from engine.money import ZERO
 from engine.notices import Notice
 from engine.rules import common, pack_for_year
@@ -34,12 +34,14 @@ from engine.rules.setoff import LossEntry, SetOffResult, set_off
 
 __all__ = [
     "MANUAL_PREFIX",
+    "ChargesByType",
     "FundClass",
     "LossEntry",
     "Notice",
     "Shortfall",
     "TaxYearReport",
     "Transfer",
+    "charges_by_type",
     "compute_tax_year",
     "compute_tax_years",
     "engine_version",
@@ -351,6 +353,53 @@ def compute_tax_years(
         reports.append(report)
         carried = list(report.carried_forward)
     return reports
+
+
+HAS_CHARGE_COLUMNS = frozenset({"CAS", "OPENING", "MANUAL", "ANGELONE"})
+"""Trade-id prefixes whose source records charges, so a zero means none were paid."""
+
+
+@dataclass(frozen=True, slots=True)
+class ChargesByType:
+    """The charges on one tax year's trades, by type (brief 0005). Information only: tax uses
+    each trade's total, as in ``Trade.charges``."""
+
+    by_kind: Mapping[str, tuple[Decimal, Decimal]]
+    """Charge type (``CHARGE_KINDS``, then "STT", then "Not broken down") → (on buys, on sells)."""
+    without_charges: Mapping[str, int]
+    """Broker-tradebook trades with no charges and no STT at all, counted by source (e.g.
+    "ZERODHA"): those files carry no charge columns, so gains are slightly overstated."""
+
+
+def charges_by_type(trades: Iterable[Trade], start_year: int) -> ChargesByType:
+    """Add up the charges on the trades made in the tax year starting ``start_year``."""
+    start, end = tax_year_bounds(start_year)
+    totals: dict[str, list[Decimal]] = {}
+    without: dict[str, int] = {}
+
+    def add(kind: str, amount: Decimal, side: Side) -> None:
+        pair = totals.setdefault(kind, [ZERO, ZERO])
+        pair[0 if side is Side.BUY else 1] += amount
+
+    for trade in trades:
+        if not start <= trade.trade_date <= end:
+            continue
+        if not trade.charges and not trade.stt:
+            source = trade.trade_id.split(":", 1)[0]
+            # Only broker tradebooks lack charge columns; a fund redemption, a hand-entered or
+            # opening lot, or an Angel One row with no charges genuinely had none.
+            if source not in HAS_CHARGE_COLUMNS:
+                without[source] = without.get(source, 0) + 1
+            continue
+        for kind, amount in trade.charge_parts or (("Not broken down", trade.charges),):
+            if amount:
+                add(kind, amount, trade.side)
+        if trade.stt:
+            add("STT", trade.stt, trade.side)
+    order = [*CHARGE_KINDS, "STT", "Not broken down"]
+    return ChargesByType(
+        MappingProxyType({k: (totals[k][0], totals[k][1]) for k in order if k in totals}),
+        MappingProxyType(dict(sorted(without.items()))))
 
 
 def held_on(trades: Iterable[Trade], transfers: Iterable[Transfer], account: str | None,
