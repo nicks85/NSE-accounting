@@ -24,6 +24,7 @@ from engine import __version__
 from engine.api import TaxYearReport, compute_tax_years
 from engine.classify.funds import FundClass
 from engine.classify.trades import DELIVERY_SUFFIX, OPENING_PREFIX
+from engine.identifiers import is_valid_isin, scrip_key
 from engine.ledger.dedupe import account_key, dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
 from engine.ledger.settings import ManualBuy, Settings
@@ -31,6 +32,8 @@ from engine.models import CHARGE_KINDS, Segment, Side, Trade, Transfer
 from engine.money import ZERO
 from engine.rules.setoff import LossEntry, LossKind
 
+NAME_KEY = "NAME:"
+"""Instrument key of a company imported by name, before its ISIN is known (brief 0002)."""
 BUSY_TIMEOUT_SECONDS = 5.0
 """How long to wait for another process holding the ledger's write lock."""
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -368,11 +371,14 @@ class Ledger:
     def import_trades(self, profile_id: int, batch: Batch, trades: Sequence[Trade], *,
                       warnings: Sequence[str] = (),
                       how_acquired: Mapping[str, str] | None = None,
-                      account: str | None = None) -> ImportOutcome:
+                      account: str | None = None,
+                      raw_names: Mapping[str, str] | None = None) -> ImportOutcome:
         """Import one file (D3): skip trades already in the ledger, refuse the whole file if a
         trade's key is there with different details, and recognise a file already imported.
         Nothing is stored unless at least one trade is new. Inside ``rehearsal()`` everything
-        is rolled back afterwards (the import preview)."""
+        is rolled back afterwards (the import preview). ``raw_names`` (trade id → company name
+        as the file writes it) is kept with each trade, so a name confirmed as an ISIN can be
+        undone (brief 0007)."""
         if batch.kind not in BATCH_KINDS:
             raise LedgerError(f"unknown batch kind {batch.kind!r}")
         self._require_profile(profile_id)
@@ -426,6 +432,10 @@ class Ledger:
                     self._db.execute(
                         "UPDATE trade SET how_acquired = ? WHERE profile_id = ? AND dedupe_key = ?",
                         (how_acquired[trade.trade_id], profile_id, key))
+                if raw_names and trade.trade_id in raw_names:
+                    self._db.execute(
+                        "UPDATE trade SET raw_symbol = ? WHERE profile_id = ? AND dedupe_key = ?",
+                        (raw_names[trade.trade_id], profile_id, key))
         return ImportOutcome(batch_id, len(fresh), duplicates,
                              possible_duplicates=tuple(possible))
 
@@ -505,12 +515,15 @@ class Ledger:
         cursor = self._db.execute(
             "INSERT INTO trade (profile_id, batch_id, instrument_id, source_id, segment,"
             " trade_date, executed_at, side, quantity, price, dedupe_key, account_id,"
-            " entered_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " entered_on, raw_symbol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (profile_id, batch_id, self._instrument_id(trade), trade.trade_id,
              trade.segment.value, trade.trade_date.isoformat(),
              trade.executed_at.isoformat() if trade.executed_at else None, trade.side.value,
              decimal_text(trade.quantity), decimal_text(trade.price), key, account,
-             trade.entered_on.isoformat() if trade.entered_on else None))
+             trade.entered_on.isoformat() if trade.entered_on else None,
+             # A company known only by name keeps it, so confirming its ISIN can be undone.
+             trade.instrument.removeprefix(NAME_KEY)
+             if trade.instrument.startswith(NAME_KEY) else None))
         trade_row = _rowid(cursor)
         # Charges by type when the file gives them (brief 0005), else one "other" total.
         charges = [*(trade.charge_parts or (("OTHER", trade.charges),)), ("STT", trade.stt)]
@@ -730,8 +743,15 @@ class Ledger:
         row = self._db.execute(
             "SELECT id FROM import_batch WHERE profile_id = ? AND kind = 'manual'"
             " AND undone_at IS NULL", (profile_id,)).fetchone()
+        # A purchase entered under a company's name and moved to its ISIN keeps the name, so
+        # undoing the ISIN still finds it (brief 0007).
+        names: dict[tuple[str, str], str] = {}
         if row:
             batch_id = int(row[0])
+            names = {(str(source), str(code)): str(raw) for source, code, raw in self._db.execute(
+                "SELECT t.source_id, COALESCE(i.isin, i.contract_symbol), t.raw_symbol"
+                " FROM trade t JOIN instrument i ON i.id = t.instrument_id"
+                " WHERE t.batch_id = ? AND t.raw_symbol IS NOT NULL", (batch_id,))}
             self._db.execute("DELETE FROM trade WHERE batch_id = ?", (batch_id,))
         elif buys:
             batch_id = self._insert_batch(profile_id, Batch(kind="manual"), [], [],
@@ -741,9 +761,15 @@ class Ledger:
         for buy in buys:
             self._insert_trade(profile_id, batch_id, buy.trade, f"MANUAL|{buy.trade.trade_id}")
             self._db.execute(
-                "UPDATE trade SET how_acquired = ?, resolves_source_id = ?"
+                "UPDATE trade SET how_acquired = ?, resolves_source_id = ?,"
+                # Else the name of the sale it's for, if that sale was read by name.
+                " raw_symbol = COALESCE(?, raw_symbol, (SELECT s.raw_symbol FROM trade s"
+                "   WHERE s.profile_id = trade.profile_id AND s.source_id = ?"
+                "   AND s.instrument_id = trade.instrument_id AND s.batch_id <> trade.batch_id))"
                 " WHERE profile_id = ? AND dedupe_key = ?",
-                (buy.how, buy.for_trade.removesuffix(DELIVERY_SUFFIX), profile_id,
+                (buy.how, buy.for_trade.removesuffix(DELIVERY_SUFFIX),
+                 names.get((buy.trade.trade_id, buy.trade.instrument)),
+                 buy.for_trade.removesuffix(DELIVERY_SUFFIX), profile_id,
                  f"MANUAL|{buy.trade.trade_id}"))
         self._db.execute("UPDATE import_batch SET trades_added = ? WHERE id = ?",
                          (len(buys), batch_id))
@@ -882,6 +908,226 @@ class Ledger:
                     " JOIN account g ON g.id = t.to_account_id"
                     " WHERE t.profile_id = ? ORDER BY t.on_date, t.id", (profile_id,))]
 
+    # -- company names to ISINs (brief 0007) ----------------------------------------------------
+
+    def unmapped_names(self, profile_id: int) -> list[tuple[str, int]]:
+        """Companies this person has imported only by name (``NAME:`` keys, e.g. Angel One),
+        with how many imported trades each. Hand-entered purchases aren't counted."""
+        self._require_profile(profile_id)
+        return [(str(code)[len(NAME_KEY):], int(count)) for code, count in self._db.execute(
+            "SELECT i.isin, COUNT(*) FROM trade t JOIN instrument i ON i.id = t.instrument_id"
+            " JOIN import_batch b ON b.id = t.batch_id"
+            " WHERE t.profile_id = ? AND b.undone_at IS NULL AND b.kind <> 'manual'"
+            " AND i.isin LIKE 'NAME:%' GROUP BY i.isin ORDER BY i.isin", (profile_id,))]
+
+    def mapped_names(self, profile_id: int, broker: str = "angelone") -> list[tuple[str, str]]:
+        """(name as in the file, ISIN) for every name this person has confirmed."""
+        self._require_profile(profile_id)
+        return [(str(raw), str(isin)) for raw, isin in self._db.execute(
+            "SELECT a.raw_name, i.isin FROM name_alias a JOIN instrument i"
+            " ON i.id = a.instrument_id WHERE a.profile_id = ? AND a.broker = ?"
+            " ORDER BY a.raw_name", (profile_id, broker))]
+
+    def aliases(self, profile_id: int, broker: str) -> dict[str, str]:
+        """Name as ``broker`` writes it → ISIN, as this person confirmed (used on import)."""
+        return dict(self.mapped_names(profile_id, broker))
+
+    def map_name(self, profile_id: int, broker: str, name: str, isin: str) -> int:
+        """Confirm that ``name`` (as ``broker`` writes it) is ``isin`` for this person: remember
+        it for their future imports, and move their trades, settings and transfers under that
+        name to the ISIN in one transaction. Returns how many trades moved.
+
+        Duplicate keys use the broker's trade id, so they don't change, and a later import
+        with the ISIN is a duplicate. What the name's settings and transfers were is recorded,
+        so ``unmap_name`` can put them back."""
+        self._require_profile(profile_id)
+        code = "".join(isin.split()).upper()
+        if not is_valid_isin(code):
+            raise LedgerError(f"{isin!r} isn't a valid Indian ISIN (check for a typo)")
+        name = scrip_key(name)
+        if not name:
+            raise LedgerError("a company name is needed")
+        with self._transaction():
+            known = self._db.execute(
+                "SELECT i.isin FROM name_alias a JOIN instrument i ON i.id = a.instrument_id"
+                " WHERE a.profile_id = ? AND a.broker = ? AND a.raw_name = ?",
+                (profile_id, broker, name)).fetchone()
+            if known:
+                if known[0] == code:
+                    return 0
+                raise LedgerError(f"{name} is already matched to {known[0]}; undo that first")
+            target = self._instrument_for(code)
+            row = self._db.execute("SELECT id FROM instrument WHERE isin = ?",
+                                   (NAME_KEY + name,)).fetchone()
+            source = int(row[0]) if row else None
+            transfers = [] if source is None else [int(r[0]) for r in self._db.execute(
+                "SELECT id FROM transfer WHERE profile_id = ? AND instrument_id = ?",
+                (profile_id, source))]
+            self._db.execute(
+                "INSERT INTO name_alias (profile_id, broker, raw_name, instrument_id,"
+                " confirmed_at, name_setting_json, isin_setting_json, moved_transfers_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (profile_id, broker, name, target, _now(),
+                 json.dumps(self._setting(profile_id, source) if source else None),
+                 json.dumps(self._setting(profile_id, target)), json.dumps(transfers)))
+            if source is None:
+                return 0
+            moved = self._db.execute(
+                "UPDATE trade SET raw_symbol = COALESCE(raw_symbol, ?), instrument_id = ?"
+                " WHERE profile_id = ? AND instrument_id = ?", (name, target, profile_id, source))
+            self._db.execute("UPDATE transfer SET instrument_id = ? WHERE profile_id = ? AND"
+                             " instrument_id = ?", (target, profile_id, source))
+            self._move_setting(profile_id, source, target, name)
+        return moved.rowcount
+
+    def unmap_name(self, profile_id: int, broker: str, name: str) -> int:
+        """Undo a confirmation for this person. Every trade read under ``name`` (as the file
+        wrote it, including those imported after the confirmation, and purchases entered under
+        the name or for one of its sales) goes back to it, and the remembered answer is
+        dropped. Returns how many trades moved back.
+
+        - **Transfers** go back if the confirmation moved them, or if the shares they move can
+          only be the name's: the sending account holds nothing else of the ISIN.
+        - **Settings** (fund class, 31-Jan-2018 price, 112A name): the name gets back what it
+          had. What the confirmation put on the ISIN is taken off again, unless it was changed
+          since; then, if nothing else of this person uses the ISIN, the change was about the
+          name's shares and goes with them. Another name still matched to the ISIN fills in
+          what is taken off, as its own confirmation would have."""
+        self._require_profile(profile_id)
+        name = scrip_key(name)
+        with self._transaction():
+            alias = self._db.execute(
+                "SELECT instrument_id, name_setting_json, isin_setting_json,"
+                " moved_transfers_json FROM name_alias"
+                " WHERE profile_id = ? AND broker = ? AND raw_name = ?",
+                (profile_id, broker, name)).fetchone()
+            if alias is None:
+                raise LedgerError(f"{name} isn't matched to an ISIN")
+            target = int(alias[0])
+            name_before, isin_before = json.loads(alias[1]), json.loads(alias[2])
+            shared = self._db.execute(
+                "SELECT 1 FROM trade WHERE profile_id = ? AND instrument_id = ?"
+                " AND (raw_symbol IS NULL OR raw_symbol <> ?) LIMIT 1",
+                (profile_id, target, name)).fetchone() is not None
+            transfers = self._names_transfers(profile_id, target, name, json.loads(alias[3]))
+            back = self._instrument_for(NAME_KEY + name)
+            moved = self._db.execute(
+                "UPDATE trade SET instrument_id = ? WHERE profile_id = ? AND instrument_id = ?"
+                " AND raw_symbol = ?", (back, profile_id, target, name))
+            self._db.executemany(
+                "UPDATE transfer SET instrument_id = ? WHERE id = ?",
+                [(back, transfer) for transfer in transfers])
+            self._db.execute("DELETE FROM name_alias WHERE profile_id = ? AND broker = ? AND"
+                             " raw_name = ?", (profile_id, broker, name))
+            self._unmerge_setting(profile_id, target, back, name, name_before,
+                                  isin_before, shared=shared)
+        return moved.rowcount
+
+    def _names_transfers(self, profile_id: int, target: int, name: str,
+                         recorded: list[int]) -> set[int]:
+        """Transfers of the ISIN that carry the name's shares: those the confirmation moved,
+        and those sent from an account whose only shares of the ISIN are the name's (bought
+        under it, or received only that way)."""
+        holders: dict[int, set[bool]] = {}
+        for account, own in self._db.execute(
+                "SELECT account_id, raw_symbol IS ? FROM trade WHERE profile_id = ? AND"
+                " instrument_id = ?", (name, profile_id, target)):
+            holders.setdefault(account, set()).add(bool(own))
+        names_only = {a for a, kinds in holders.items() if kinds == {True}}
+        moves = [(int(i), f, t) for i, f, t in self._db.execute(
+            "SELECT id, from_account_id, to_account_id FROM transfer WHERE profile_id = ? AND"
+            " instrument_id = ? ORDER BY on_date, id", (profile_id, target))]
+        while True:  # an account holding only what it received from such accounts is one too
+            received: dict[int, set[bool]] = {}
+            for _, source, to in moves:
+                received.setdefault(to, set()).add(source in names_only)
+            more = {a for a, kinds in received.items()
+                    if kinds == {True} and a not in holders and a not in names_only}
+            if not more:
+                break
+            names_only |= more
+        return {i for i, source, _ in moves if source in names_only} | (
+            set(recorded) & {i for i, _, _ in moves})
+
+    def _unmerge_setting(self, profile_id: int, target: int, back: int, name: str,
+                         name_before: list[Any] | None, isin_before: list[Any] | None, *,
+                         shared: bool) -> None:
+        """Settings when a confirmation is undone (see ``unmap_name``), field by field."""
+        now = _fields(self._setting(profile_id, target))
+        own = _fields(name_before)
+        brought = _fields(name_before, name)  # what the name brought (its name if unset)
+        before = _fields(isin_before)
+        others = [(str(raw), json.loads(n), json.loads(i), str(b)) for raw, n, i, b in (
+            self._db.execute(
+            "SELECT raw_name, name_setting_json, isin_setting_json, broker FROM name_alias"
+            " WHERE profile_id = ? AND instrument_id = ? ORDER BY confirmed_at, raw_name",
+            (profile_id, target)))]
+        later = [_fields(i) for _, _, i, _ in others]
+        to_name, to_isin = list(own), list(now)
+        for f in range(len(now)):
+            from_name = before[f] is None and brought[f] is not None
+            if not from_name or now[f] != brought[f]:  # the ISIN's own, or changed since
+                if not shared and now[f] != (before[f] if before[f] is not None else brought[f]):
+                    to_name[f], to_isin[f] = now[f], before[f]
+                elif not shared:
+                    to_isin[f] = before[f]
+                continue
+            # Take the name's value off the ISIN; the next name matched to it fills in.
+            to_isin[f] = None
+            for fields in later:
+                if fields[f] == brought[f]:
+                    fields[f] = None  # its snapshot held this name's value
+            for n, (raw, name_row, _, _) in enumerate(others):
+                value = _fields(name_row, raw)[f]
+                if value is not None and later[n][f] is None:
+                    to_isin[f] = value
+                    for fields in later[n + 1:]:
+                        if fields[f] is None:
+                            fields[f] = value
+                    break
+        self._put_setting(profile_id, back, _setting_of(to_name))
+        self._put_setting(profile_id, target, _setting_of(to_isin))
+        for (raw, _, _, its_broker), fields in zip(others, later, strict=True):
+            self._db.execute(
+                "UPDATE name_alias SET isin_setting_json = ? WHERE profile_id = ? AND"
+                " broker = ? AND raw_name = ?",
+                (json.dumps(_setting_of(fields)), profile_id, its_broker, raw))
+
+    def _setting(self, profile_id: int, instrument: int) -> list[Any] | None:
+        """[fund class, guessed, 31-Jan-2018 price, name for 112A] for one instrument."""
+        row = self._db.execute(
+            "SELECT fund_class, fund_class_guessed, fmv_2018, name_for_112a FROM"
+            " instrument_setting WHERE profile_id = ? AND instrument_id = ?",
+            (profile_id, instrument)).fetchone()
+        return list(row) if row else None
+
+    def _put_setting(self, profile_id: int, instrument: int, setting: list[Any] | None) -> None:
+        self._db.execute("DELETE FROM instrument_setting WHERE profile_id = ? AND"
+                         " instrument_id = ?", (profile_id, instrument))
+        if setting is not None:
+            self._db.execute(
+                "INSERT INTO instrument_setting (profile_id, instrument_id, fund_class,"
+                " fund_class_guessed, fmv_2018, name_for_112a) VALUES (?, ?, ?, ?, ?, ?)",
+                (profile_id, instrument, *setting))
+
+    def _move_setting(self, profile_id: int, source: int, target: int, name: str) -> None:
+        """Move the name's settings (fund class, 31-Jan-2018 price, name for 112A) to the ISIN,
+        keeping anything already set for the ISIN; the name becomes the ISIN's name if unset.
+        A fund class taken from the name keeps its "guessed" flag."""
+        old = self._setting(profile_id, source) or [None, 0, None, None]
+        self._db.execute(
+            "INSERT INTO instrument_setting (profile_id, instrument_id, fund_class,"
+            " fund_class_guessed, fmv_2018, name_for_112a) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (profile_id, instrument_id) DO UPDATE SET"
+            " fund_class_guessed = CASE WHEN fund_class IS NULL"
+            "   THEN excluded.fund_class_guessed ELSE fund_class_guessed END,"
+            " fund_class = COALESCE(fund_class, excluded.fund_class),"
+            " fmv_2018 = COALESCE(fmv_2018, excluded.fmv_2018),"
+            " name_for_112a = COALESCE(name_for_112a, excluded.name_for_112a)",
+            (profile_id, target, old[0], old[1], old[2], old[3] or name))
+        self._db.execute("DELETE FROM instrument_setting WHERE profile_id = ? AND"
+                         " instrument_id = ?", (profile_id, source))
+
     def _instrument_for(self, code: str) -> int:
         row = self._db.execute(
             "SELECT id FROM instrument WHERE isin = ? OR contract_symbol = ?",
@@ -928,6 +1174,21 @@ def _copy(source: sqlite3.Connection, target: sqlite3.Connection) -> None:
     SQLite waits while another connection holds a write lock; Kosh windows hold it only
     for the length of one save."""
     source.backup(target)
+
+
+def _fields(setting: list[Any] | None, name: str | None = None) -> list[Any]:
+    """An instrument's settings as three independent fields: (fund class, guessed), the
+    31-Jan-2018 price, and the name for 112A (``name`` when unset, as ``_move_setting`` does)."""
+    fund_class, guessed, fmv, named = setting or (None, 0, None, None)
+    return [(fund_class, int(guessed)) if fund_class is not None else None, fmv, named or name]
+
+
+def _setting_of(fields: list[Any]) -> list[Any] | None:
+    """The row for ``_put_setting`` from ``_fields``; None when nothing is set."""
+    if all(f is None for f in fields):
+        return None
+    fund_class, guessed = fields[0] or (None, 0)
+    return [fund_class, guessed, fields[1], fields[2]]
 
 
 def _expected_schema() -> set[tuple[str, str, str, str]]:

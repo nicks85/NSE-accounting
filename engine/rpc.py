@@ -334,7 +334,7 @@ def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str,
             raise RequestError("isin_map must be an object of scrip name → ISIN")
         angel = load_angel_one_tradebooks(
             files, isin_map={str(k): str(v) for k, v in isin_map.items()}, password=password)
-        result = angel.result
+        result = _AngelOneResult(angel.result, angel.scrips)
         names = angel.names
     elif broker == "opening":
         from importers.opening import load_opening_csv
@@ -356,6 +356,18 @@ def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str,
     else:
         raise RequestError(f"unknown broker {broker!r}")
     return result, suggested, names
+
+
+class _AngelOneResult:
+    """An Angel One file's result, plus each trade's company name as the file writes it, which
+    the ledger keeps so a name confirmed as an ISIN can be undone (brief 0007)."""
+
+    def __init__(self, result: Any, scrips: dict[str, str]) -> None:
+        self._result = result
+        self.scrips = scrips
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._result, name)
 
 
 class _OpeningResult:
@@ -437,6 +449,9 @@ def _ledger_state(profile_id: int) -> JSON:
     ledger = _ledger()
     return {"trades": [trade_to_json(t) for t in ledger.trades(profile_id)],
             "batches": ledger.batches(profile_id), "accounts": ledger.accounts(profile_id),
+            "names_unmapped": [{"name": n, "trades": c}
+                               for n, c in ledger.unmapped_names(profile_id)],
+            "names_mapped": [{"name": n, "isin": i} for n, i in ledger.mapped_names(profile_id)],
             "transfers": [_transfer_json(t) for t in ledger.transfers(profile_id)]}
 
 
@@ -583,6 +598,9 @@ def m_ledger_import(params: JSON) -> JSON:
     confirmed = True
     # Read every file before saving any, so a bad second file doesn't leave the first saved.
     parsed: list[tuple[str, str, str | None, Any]] = []
+    if params.get("broker") == "angelone":  # names this person confirmed are applied on import
+        params = {**params, "isin_map": {**ledger.aliases(profile_id, "angelone"),
+                                         **(params.get("isin_map") or {})}}
     loaded = _files(params)
     if expected is not None:
         given = [hashlib.sha256(data).hexdigest() for _, data in loaded]
@@ -604,7 +622,8 @@ def m_ledger_import(params: JSON) -> JSON:
             result, file_suggested, file_names = parsed_file
             outcome = ledger.import_trades(
                 profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings,
-                how_acquired=getattr(result, "how_acquired", None), account=account)
+                how_acquired=getattr(result, "how_acquired", None), account=account,
+                raw_names=getattr(result, "scrips", None))
             files.append({
                 **_file_summary(name, sha, result, account),
                 "added": outcome.added, "duplicates": outcome.duplicates,
@@ -667,6 +686,44 @@ def m_ledger_remove_transfer(params: JSON) -> JSON:
         raise RequestError("transfer_id must look like TRANSFER:<number>")
     _ledger().remove_transfer(profile_id, int(transfer_id[9:]))
     return _ledger_state(profile_id)
+
+
+def m_ledger_map_name(params: JSON) -> JSON:
+    """Confirm the ISIN of a company imported by name (brief 0007). Saved trades, settings and
+    transfers under the name move to the ISIN; future imports use it. The reply carries the
+    settings, since a name's settings move too."""
+    from engine.identifiers import scrip_key
+
+    profile_id = _profile_id(params)
+    name, isin = str(params.get("name") or ""), str(params.get("isin") or "")
+    ledger = _ledger()
+    before = ledger.settings(profile_id)
+    ledger.map_name(profile_id, str(params.get("broker") or "angelone"), name, isin)
+    return {**_ledger_state(profile_id), "notes": _merge_notes(
+                before, "NAME:" + scrip_key(name), "".join(isin.split()).upper()),
+            "settings": _settings_to_json(ledger.settings(profile_id))}
+
+
+def _merge_notes(before: Any, key: str, isin: str) -> list[str]:
+    """Where the name and the ISIN already had different settings: the ISIN's are kept, and
+    the user is told, since two values for one company usually mean one is a mistake."""
+    notes = []
+    for label, values in (("31-Jan-2018 price", before.fmv_2018),
+                          ("fund class", before.fund_classes)):
+        mine, kept = values.get(key), values.get(isin)
+        if mine is not None and kept is not None and mine != kept:
+            mine, kept = getattr(mine, "value", mine), getattr(kept, "value", kept)
+            notes.append(f"{key[5:]} had the {label} {mine}, but {isin} already had {kept}; "
+                         f"{kept} is kept for both. Check which is right.")
+    return notes
+
+
+def m_ledger_unmap_name(params: JSON) -> JSON:
+    profile_id = _profile_id(params)
+    _ledger().unmap_name(profile_id, str(params.get("broker") or "angelone"),
+                         str(params.get("name") or ""))
+    return {**_ledger_state(profile_id),
+            "settings": _settings_to_json(_ledger().settings(profile_id))}
 
 
 def m_ledger_rename_account(params: JSON) -> JSON:
@@ -810,6 +867,8 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "ledger_add_transfer": m_ledger_add_transfer,
     "ledger_remove_transfer": m_ledger_remove_transfer,
     "ledger_rename_account": m_ledger_rename_account,
+    "ledger_map_name": m_ledger_map_name,
+    "ledger_unmap_name": m_ledger_unmap_name,
     "ledger_assign_account": m_ledger_assign_account,
     "opening_template": m_opening_template,
     "ledger_add_opening": m_ledger_add_opening,

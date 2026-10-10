@@ -57,6 +57,10 @@ export type Session = {
   accounts: string[];
   /** Moves between the person's own accounts. */
   transfers: Transfer[];
+  /** Companies imported by name only (no ISIN yet), with their trade counts (brief 0007). */
+  namesUnmapped: { name: string; trades: number }[];
+  /** Names the person has confirmed, and their ISIN. */
+  namesMapped: { name: string; isin: string }[];
   /** Why the ledger couldn't be opened, if it couldn't. */
   ledgerError: string | null;
   /** Every person kept in this ledger (task 3: one file, several people). */
@@ -92,6 +96,8 @@ export const EMPTY_SESSION: Session = {
   batches: [],
   accounts: [],
   transfers: [],
+  namesUnmapped: [],
+  namesMapped: [],
   ledgerError: null,
   profiles: [],
   settingsLoaded: false,
@@ -158,15 +164,22 @@ export function computeParams(session: Session) {
 export const PROFILE_KEY = "kosh.profile";
 
 export type Profile = { id: number; name: string };
-export type LedgerState = { trades: Trade[]; batches: ImportBatch[]; accounts?: string[]; transfers?: Transfer[] };
+export type LedgerState = {
+  trades: Trade[]; batches: ImportBatch[]; accounts?: string[]; transfers?: Transfer[];
+  names_unmapped?: { name: string; trades: number }[]; names_mapped?: { name: string; isin: string }[];
+};
 
 /** The session fields a ledger reply refreshes. */
-export function ledgerFields(state: LedgerState): Pick<Session, "trades" | "batches" | "accounts" | "transfers"> {
-  return { trades: state.trades, batches: state.batches, accounts: state.accounts ?? [], transfers: state.transfers ?? [] };
+export function ledgerFields(state: LedgerState): Pick<Session,
+  "trades" | "batches" | "accounts" | "transfers" | "namesUnmapped" | "namesMapped"> {
+  return {
+    trades: state.trades, batches: state.batches, accounts: state.accounts ?? [], transfers: state.transfers ?? [],
+    namesUnmapped: state.names_unmapped ?? [], namesMapped: state.names_mapped ?? [],
+  };
 }
 
 /** Settings as the engine stores them (brief 0001 task 3). */
-type SavedSettings = {
+export type SavedSettings = {
   fund_classes: Record<string, FundClass>;
   unconfirmed: string[];
   fmv_2018: Record<string, string>;
@@ -191,7 +204,8 @@ function toSaved(s: Session): SavedSettings {
   };
 }
 
-function fromSaved(saved: SavedSettings): Partial<Session> {
+/** Session fields from settings the engine sent (e.g. after a change it made to them). */
+export function fromSaved(saved: SavedSettings): Partial<Session> {
   return {
     fundClasses: saved.fund_classes, unconfirmed: saved.unconfirmed, fmv2018: saved.fmv_2018, names: saved.names,
     broughtForward: saved.brought_forward,
@@ -230,6 +244,37 @@ export async function openProfile(name: string, update: Store["update"]): Promis
   }
 }
 
+/** Settings saves: one at a time, in order, since two requests in flight could land in either
+ * order. While one is running, only the newest waiting set per person is kept. */
+const saves = {
+  running: false, paused: false, waiting: new Map<number, string>(), idle: [] as (() => void)[],
+  flush: () => {},
+};
+
+/** Runs ``change`` (an engine call that changes this person's saved settings itself, such as
+ * matching a company name to its ISIN, whose reply carries the settings) once every queued
+ * settings save has landed, and holds new saves until it is done. A set queued meanwhile was
+ * made before the change and is dropped: the reply's settings replace it. Changes run one at a
+ * time. */
+let changes: Promise<unknown> = Promise.resolve();
+export function afterSettingsSaved<T>(profileId: number | null, change: () => Promise<T>): Promise<T> {
+  const run = changes.then(async () => {
+    if (saves.running || saves.waiting.size > 0) {
+      await new Promise<void>((resolve) => saves.idle.push(resolve));
+    }
+    saves.paused = true;
+    try {
+      return await change();
+    } finally {
+      if (profileId !== null) saves.waiting.delete(profileId);
+      saves.paused = false;
+      saves.flush();
+    }
+  });
+  changes = run.catch(() => undefined);
+  return run;
+}
+
 /** Opens the saved profile once on launch, then saves every settings change straight away. */
 export function LedgerLoader() {
   const { session, update } = useSession();
@@ -240,14 +285,15 @@ export function LedgerLoader() {
 
   // What the ledger holds for this profile, so loading a profile doesn't save it straight back.
   const saved = useRef<string | null>(null);
-  // One save at a time, in order: two requests in flight could land in either order. While one
-  // is running, only the newest waiting set per person is kept.
-  const queue = useRef<{ running: boolean; waiting: Map<number, string> }>({ running: false, waiting: new Map() });
+  const queue = useRef(saves);
   const flush = () => {
     const q = queue.current;
-    if (q.running) return;
+    if (q.running || q.paused) return;
     const next = q.waiting.entries().next();
-    if (next.done) return;
+    if (next.done) {
+      q.idle.splice(0).forEach((resolve) => resolve());
+      return;
+    }
     const [pid, settings] = next.value;
     q.waiting.delete(pid);
     q.running = true;
@@ -263,6 +309,7 @@ export function LedgerLoader() {
         flush();
       });
   };
+  saves.flush = flush;
   const { profileId, settingsLoaded } = session;
   const current = JSON.stringify(toSaved(session));
   useEffect(() => {

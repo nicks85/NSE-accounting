@@ -29,6 +29,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
+from engine.identifiers import scrip_key as scrip_key  # re-exported: tests and callers use it here
 from engine.models import CHARGE_KINDS, Segment, Side, Trade
 from engine.money import ZERO
 from importers.base import (
@@ -101,16 +102,13 @@ FUND_LIKE = re.compile(r"ETF|BEES|FUND|GOLD|SILVER|LIQUID|MON100|MAFANG")
 of these gets an unneeded warning, which is the safer error."""
 
 
-def scrip_key(name: str) -> str:
-    """How a scrip name is compared: upper case, single spaces."""
-    return " ".join(name.upper().split())
-
-
 @dataclass(frozen=True, slots=True)
 class _Parsed:
     result: ImportResult
     names: dict[str, str]
     """Instrument → scrip name as written in the file."""
+    scrips: dict[str, str]
+    """Trade id → scrip name, for every trade (the ledger keeps it, brief 0007)."""
 
 
 def _summary(rows: list[list[str]]) -> dict[str, str]:
@@ -138,6 +136,7 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
     trades: list[Trade] = []
     warnings: list[str] = []
     names: dict[str, str] = {}
+    scrips: dict[str, str] = {}
     by_key: dict[tuple[str, str, str], Trade] = {}
     charges_in_rows = ZERO
     skipped: dict[str, int] = {}
@@ -214,6 +213,7 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
             continue
         by_key[key] = trade
         trades.append(trade)
+        scrips[trade.trade_id] = scrip
 
     for code, count in skipped.items():
         warnings.append(f"{name}: {count} row(s) in segment {code!r} skipped; only cash equity "
@@ -227,7 +227,7 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
     warnings.extend(_check_charges(summary, charges_in_rows, name))
     return _Parsed(ImportResult(SOURCE, tuple(trades), tuple(warnings), True,
                                 _summary_amount(summary, "total_trade_charges"),
-                                charges_in_rows), names)
+                                charges_in_rows), names, scrips)
 
 
 def _summary_amount(summary: dict[str, str], label: str) -> Decimal | None:
@@ -293,6 +293,9 @@ class AngelOneImport:
     result: ImportResult
     names: dict[str, str]
     """Instrument → scrip name as written in the file (for display and Schedule 112A)."""
+    scrips: dict[str, str]
+    """Trade id → scrip name as written, for every trade, including those whose ISIN came
+    from ``isin_map``: the ledger keeps it, so a confirmed name can be undone (brief 0007)."""
 
 
 def load_angel_one_tradebooks(files: Iterable[tuple[str, bytes]], *,
@@ -304,10 +307,12 @@ def load_angel_one_tradebooks(files: Iterable[tuple[str, bytes]], *,
     checked = _checked_map(isin_map or {})
     parts: list[ImportResult] = []
     names: dict[str, str] = {}
+    scrips: dict[str, str] = {}
     for name, data in files:
         rows, notes = _rows(data, name, password)
         parsed = _parse_rows(rows, checked, name)
         names.update({k: v for k, v in parsed.names.items() if k not in names})
+        scrips.update(parsed.scrips)
         parts.append(ImportResult(parsed.result.source, parsed.result.trades,
                                   (*parsed.result.warnings, *notes), True,
                                   parsed.result.stated_charges, parsed.result.row_charges))
@@ -322,8 +327,8 @@ def load_angel_one_tradebooks(files: Iterable[tuple[str, bytes]], *,
               "share, which is wrong for gold, debt or international ETFs (Q-024)"
               for scrip in by_name if FUND_LIKE.search(scrip)]
     if not extra:
-        return AngelOneImport(merged, names)
+        return AngelOneImport(merged, names, scrips)
     return AngelOneImport(ImportResult(merged.source, merged.trades,
                                        (*merged.warnings, *extra), True, merged.stated_charges,
                                        merged.row_charges),
-                          names)
+                          names, scrips)

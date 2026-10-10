@@ -490,15 +490,22 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Needed:** CA view on what a filer should do when cost records are genuinely lost.
 - **Status:** open.
 
-## Q-032 — Source and redistribution terms of a bundled security master
+## Q-032 — Company names to ISINs: data sources and licences
 
-- **Area:** planned `engine/data/securities.csv`; decision brief 0001 (D7).
-- **Problem:** broker files such as Angel One's have no ISIN and truncated names. A list of
-  ISINs, symbols and names would be generated at dev time from public exchange equity lists
-  and bundled (no runtime network, CLAUDE.md rule 1). The exchanges' website terms of use
-  must be checked before redistributing a derived list. The list has current names only.
-- **Proposed fallback:** user confirmation of each new name, remembered in the ledger.
-- **Status:** open (not a tax rule; data licensing).
+- **Area:** brief 0007 (replaces brief 0001 D7).
+- **Exchanges (checked 2026-10-10):**
+  - NSE's terms of use say its data "shall not be copied, … reproduced, … stored … distributed
+    in any form, without prior written permission of NSE".
+  - BSE's disclaimer says the same.
+  - So Kosh can't bundle a list built from their files.
+- **`casparser-isin`** (a dependency, shipped inside the engine for CAS imports) has a table of
+  260,103 ISINs, 107,155 of them active equity shares. The package is MIT, but the source and
+  licence of its data aren't stated.
+  - **Not used for name matching** (brief 0007, option a only).
+  - **Still open:** whether Kosh should keep shipping that table at all.
+- **Implemented:** the user types each name's ISIN once (check digit verified). It is remembered
+  per broker and name (`symbol_alias`), and saved trades move to the ISIN.
+- **Status:** open (the licence of the shipped table).
 
 ## Q-033 — Rights entitlements (RE) and "Adjustment" lots
 

@@ -599,3 +599,50 @@ def test_residency_over_rpc(ledger_dir: Path) -> None:
                                        residency="X")["error"]["message"]
     bad = call("ledger_save_settings", profile_id=person, settings={"residency": {"2025": "X"}})
     assert "residency must be" in bad["error"]["message"]
+
+
+def b64bytes(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+
+def test_names_to_isins_over_rpc(ledger_dir: Path) -> None:
+    from tests.fixtures import angel_one as ao
+
+    person = ok("ledger_profile")["profile"]["id"]
+    rows = [ao.Row("SYNTHETIC ALPHA LTD", "BUY", "100", 10, "2025-05-02", "1")]
+    first = ok("ledger_import", profile_id=person, broker="angelone",
+               files=[{"name": "a.csv", "data_base64": b64bytes(ao.trades_csv(rows))}])
+    assert first["names_unmapped"] == [{"name": "SYNTHETIC ALPHA LTD", "trades": 1}]
+    mapped = ok("ledger_map_name", profile_id=person, name="SYNTHETIC ALPHA LTD",
+                isin=ao.SYNTH_A)
+    assert mapped["names_unmapped"] == [] and mapped["names_mapped"] == [
+        {"name": "SYNTHETIC ALPHA LTD", "isin": ao.SYNTH_A}]
+    assert mapped["settings"]["names"] == {ao.SYNTH_A: "SYNTHETIC ALPHA LTD"}
+    # A new file from the same broker uses the confirmed name straight away.
+    more = [*rows, ao.Row("SYNTHETIC ALPHA LTD", "SELL", "120", 10, "2025-09-01", "2")]
+    later = ok("ledger_import", profile_id=person, broker="angelone",
+               files=[{"name": "b.csv", "data_base64": b64bytes(ao.trades_csv(more))}])
+    assert later["files"][0]["duplicates"] == 1 and later["files"][0]["conflicts"] == []
+    assert {t["instrument"] for t in later["trades"]} == {ao.SYNTH_A}
+    undone = ok("ledger_unmap_name", profile_id=person, name="SYNTHETIC ALPHA LTD")
+    # Both go back, including the sale imported after the match.
+    assert undone["names_mapped"] == [] and undone["names_unmapped"][0]["trades"] == 2
+    assert "valid Indian ISIN" in call("ledger_map_name", profile_id=person,
+                                       name="X", isin="INE000A01011")["error"]["message"]
+
+
+def test_matching_a_name_says_when_two_prices_differ(ledger_dir: Path) -> None:
+    from tests.fixtures import angel_one as ao
+
+    person = ok("ledger_profile")["profile"]["id"]
+    rows = [ao.Row("SYNTHETIC ALPHA LTD", "BUY", "100", 10, "2017-05-02", "1")]
+    ok("ledger_import", profile_id=person, broker="angelone",
+       files=[{"name": "a.csv", "data_base64": b64bytes(ao.trades_csv(rows))}])
+    ok("ledger_save_settings", profile_id=person, settings={
+        "fmv_2018": {"NAME:SYNTHETIC ALPHA LTD": "50", ao.SYNTH_A: "60"}})
+    mapped = ok("ledger_map_name", profile_id=person, name="synthetic alpha ltd",
+                isin=ao.SYNTH_A)
+    assert mapped["notes"] == [
+        f"SYNTHETIC ALPHA LTD had the 31-Jan-2018 price 50, but {ao.SYNTH_A} already had 60; "
+        "60 is kept for both. Check which is right."]
+    assert mapped["settings"]["fmv_2018"] == {ao.SYNTH_A: "60"}
