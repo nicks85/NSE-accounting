@@ -142,3 +142,15 @@ def test_sale_value_and_cost_moving_together_is_a_change(ledger: Ledger, person:
 def test_unmark_needs_a_known_profile(ledger: Ledger) -> None:
     with pytest.raises(LedgerError, match="no profile"):
         ledger.unmark_filed(99, 2025)
+
+
+def test_only_brought_forward_set_offs_are_compared() -> None:
+    """A current-year set-off step (e.g. the exemption) is in the summary already; only
+    brought-forward set-offs get their own figure."""
+    report = {"summary": {"bucket_nets": [], "exemption_used": [], "taxable": [],
+                          "special_rate_tax_rounded": "0", "speculative_after_setoff": "0",
+                          "non_speculative_after_setoff": "0", "speculative_income": "0",
+                          "non_speculative_income": "0"},
+              "carried_forward": [], "capital_gains": [], "business_lines": [],
+              "setoff_steps": [{"loss": "LTCG exemption", "amount": "100"}]}
+    assert not any(k.startswith("Set off:") for k in figures(report))

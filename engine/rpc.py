@@ -17,6 +17,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -32,7 +33,7 @@ from engine.api import (
 )
 from engine.classify.funds import isin_of
 from engine.matching.corporate_actions import Bonus, CorporateAction, Split
-from engine.models import Lot, Segment, Side, Trade
+from engine.models import Lot, Segment, Side, Trade, Transfer
 from engine.rules.base import Citation
 from engine.rules.setoff import LossKind
 
@@ -64,6 +65,30 @@ def _date(value: Any, name: str) -> date:
         raise RequestError(f"{name} must be an ISO date, got {value!r}") from None
 
 
+def _text_or_none(value: Any) -> str | None:
+    text = " ".join(str(value).split()) if value is not None else ""
+    return text or None
+
+
+def _transfers(items: Any) -> list[Transfer]:
+    if not isinstance(items, list):
+        raise RequestError("transfers must be a list")
+    try:
+        return [Transfer(str(t.get("transfer_id") or f"TRANSFER:{n}"), _date(t["on"], "on"),
+                         str(t["instrument"]), _dec(t["quantity"], "quantity"),
+                         _text_or_none(t.get("from_account")), _text_or_none(t.get("to_account")))
+                for n, t in enumerate(items, start=1)]
+    except KeyError as missing:
+        raise RequestError(f"transfer is missing {missing}") from None
+
+
+def _transfer_json(move: Transfer) -> JSON:
+    return {"transfer_id": move.transfer_id, "on": move.on.isoformat(),
+            "instrument": move.instrument, "isin": isin_of(move.instrument),
+            "quantity": _s(move.quantity), "from_account": move.from_account,
+            "to_account": move.to_account}
+
+
 def trade_from_json(data: JSON) -> Trade:
     try:
         executed = data.get("executed_at")
@@ -78,6 +103,8 @@ def trade_from_json(data: JSON) -> Trade:
             stt=_dec(data.get("stt", "0"), "stt"),
             segment=Segment(data.get("segment", Segment.EQUITY.value)),
             executed_at=datetime.fromisoformat(executed) if executed else None,
+            account=_text_or_none(data.get("account")),
+            entered_on=_date(data["entered_on"], "entered_on") if data.get("entered_on") else None,
         )
     except KeyError as missing:
         raise RequestError(f"trade is missing {missing}") from None
@@ -121,6 +148,7 @@ def _compute_inputs(params: JSON) -> tuple[int, dict[str, Any]]:
         "brought_forward": _losses(params.get("brought_forward", [])),
         "excluded": [str(t) for t in params.get("excluded", [])],
         "late_returns": [int(y) for y in params.get("late_returns", [])],
+        "transfers": _transfers(params.get("transfers", [])),
     }
 
 
@@ -143,6 +171,8 @@ def trade_to_json(trade: Trade) -> JSON:
         "quantity": _s(trade.quantity), "price": _s(trade.price),
         "charges": _s(trade.charges), "stt": _s(trade.stt), "segment": trade.segment.value,
         "executed_at": trade.executed_at.isoformat() if trade.executed_at else None,
+        "account": trade.account,
+        "entered_on": trade.entered_on.isoformat() if trade.entered_on else None,
     }
 
 
@@ -157,7 +187,8 @@ def citation_to_json(citation: Citation, report: TaxYearReport) -> JSON:
 def _lot(lot: Lot) -> JSON:
     return {"instrument": lot.instrument, "isin": isin_of(lot.instrument),
             "acquired_on": lot.acquired_on.isoformat(), "quantity": _s(lot.quantity),
-            "cost": _s(lot.cost), "segment": lot.segment.value}
+            "cost": _s(lot.cost), "segment": lot.segment.value, "account": lot.account,
+            "entered_on": lot.entered_on.isoformat() if lot.entered_on else None}
 
 
 def _loss(entry: LossEntry) -> JSON:
@@ -169,7 +200,8 @@ def _shortfall(gap: Shortfall) -> JSON:
     return {"trade_id": gap.trade_id, "instrument": gap.instrument,
             "isin": isin_of(gap.instrument), "sold_on": gap.sold_on.isoformat(),
             "quantity": _s(gap.quantity), "price": _s(gap.price),
-            "sale_value": _s(gap.sale_value), "segment": gap.segment.value}
+            "sale_value": _s(gap.sale_value), "segment": gap.segment.value,
+            "account": gap.account}
 
 
 def report_to_json(report: TaxYearReport) -> JSON:
@@ -209,6 +241,7 @@ def report_to_json(report: TaxYearReport) -> JSON:
             "gain": _s(line.gain),
             "bucket": line.bucket.label,
             "manual": line.manual,
+            "account": line.disposal.account,
             "open_trade_id": line.disposal.open_trade_id,
             "close_trade_id": line.disposal.close_trade_id,
             "citations": [citation_to_json(c, report) for c in line.citations],
@@ -348,7 +381,8 @@ def m_ledger_add_opening(params: JSON) -> JSON:
         raise RequestError("rows must be a list of objects")
     opening = parse_rows(rows, today=date.today())
     outcome = _ledger().import_trades(profile_id, Batch("opening", "opening", "Entered by hand"),
-                                      opening.trades, how_acquired=opening.how_acquired)
+                                      opening.trades, how_acquired=opening.how_acquired,
+                                      account=_text_or_none(params.get("account")))
     return {"added": outcome.added, "duplicates": outcome.duplicates,
             "conflicts": [{"new": trade_to_json(c.new), "existing": trade_to_json(c.existing),
                            "reason": c.reason} for c in outcome.conflicts],
@@ -395,7 +429,8 @@ def _profile_id(params: JSON) -> int:
 def _ledger_state(profile_id: int) -> JSON:
     ledger = _ledger()
     return {"trades": [trade_to_json(t) for t in ledger.trades(profile_id)],
-            "batches": ledger.batches(profile_id)}
+            "batches": ledger.batches(profile_id), "accounts": ledger.accounts(profile_id),
+            "transfers": [_transfer_json(t) for t in ledger.transfers(profile_id)]}
 
 
 def _settings_to_json(settings: Any) -> JSON:
@@ -482,6 +517,10 @@ def m_ledger_import(params: JSON) -> JSON:
     profile_id = _profile_id(params)
     ledger = _ledger()
     kind = {"cas": "cas", "opening": "opening"}.get(str(params.get("broker")), "tradebook")
+    # The demat account these files are from (brief 0003 A); funds have none.
+    account = None if kind == "cas" else (
+        _text_or_none(params.get("account")) or BROKER_ACCOUNTS.get(str(params.get("broker")))
+        or _text_or_none(params.get("key")) or None)
     broker = str(params.get("key") or params.get("broker") or "")
     files: list[JSON] = []
     suggested: dict[str, str] = {}
@@ -499,12 +538,13 @@ def m_ledger_import(params: JSON) -> JSON:
         if when:
             files.append({"name": name, "added": 0, "duplicates": 0,
                           "already_imported_on": when, "conflicts": [],
-                          "possible_duplicates": 0})
+                          "possible_duplicates": 0,
+                          "imported_into": ledger.imported_into(profile_id, sha)})
             continue
         result, file_suggested, file_names = parsed_file
         outcome = ledger.import_trades(
             profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings,
-            how_acquired=getattr(result, "how_acquired", None))
+            how_acquired=getattr(result, "how_acquired", None), account=account)
         files.append({
             "name": name, "added": outcome.added, "duplicates": outcome.duplicates,
             "already_imported_on": outcome.already_imported_on,
@@ -521,6 +561,70 @@ def m_ledger_import(params: JSON) -> JSON:
             "format_confirmed": confirmed, "warnings": warnings,
             "suggested_classes": suggested, "scheme_names": names,
             **_ledger_state(profile_id)}
+
+
+BROKER_ACCOUNTS = {"zerodha": "Zerodha", "upstox": "Upstox", "angelone": "Angel One"}
+"""Default account name per broker: one account per broker unless the user names another."""
+
+
+def m_ledger_add_transfer(params: JSON) -> JSON:
+    """Record shares moved between two of the person's accounts. Refused if the source
+    account didn't hold that many on the day (counting earlier transfers)."""
+    from engine.api import held_on
+
+    profile_id = _profile_id(params)
+    ledger = _ledger()
+    [move] = _transfers([{**params, "transfer_id": "NEW"}])
+    if move.from_account is None or move.to_account is None:
+        raise RequestError("a transfer needs both accounts")
+    # Trades carry the stored account name; the user may type it in any case.
+    source = ledger.account_name(profile_id, move.from_account)
+    if source is None:
+        raise RequestError(f"no account called {move.from_account!r}")
+    move = replace(move, from_account=source,
+                   to_account=ledger.account_name(profile_id, move.to_account) or move.to_account)
+    settings = ledger.settings(profile_id)
+    trades = ledger.trades(profile_id) + [m.trade for m in settings.manual_buys]
+    held = held_on(trades, ledger.transfers(profile_id), move.from_account, move.instrument,
+                   move.on)
+    if held < move.quantity:
+        raise RequestError(f"{move.from_account} held {held} of {move.instrument} on "
+                           f"{move.on}, fewer than {move.quantity}; import its older purchases "
+                           "first, or check the date and quantity")
+    ledger.add_transfer(profile_id, move.on, move.instrument, move.quantity, move.from_account,
+                        move.to_account)
+    return _ledger_state(profile_id)
+
+
+def m_ledger_remove_transfer(params: JSON) -> JSON:
+    profile_id = _profile_id(params)
+    transfer_id = str(params.get("transfer_id") or "")
+    if not transfer_id.startswith("TRANSFER:") or not transfer_id[9:].isdigit():
+        raise RequestError("transfer_id must look like TRANSFER:<number>")
+    _ledger().remove_transfer(profile_id, int(transfer_id[9:]))
+    return _ledger_state(profile_id)
+
+
+def m_ledger_rename_account(params: JSON) -> JSON:
+    """Rename an account. The reply carries the settings too: hand-entered purchases name
+    their account, and the page must not save the old name back."""
+    profile_id = _profile_id(params)
+    _ledger().rename_account(profile_id, str(params.get("old") or ""),
+                             str(params.get("new") or ""))
+    return {**_ledger_state(profile_id),
+            "settings": _settings_to_json(_ledger().settings(profile_id))}
+
+
+def m_ledger_assign_account(params: JSON) -> JSON:
+    """Put share trades that have no account yet into ``account``: all of them, or the
+    engine trade ids in ``trade_ids``."""
+    profile_id = _profile_id(params)
+    ids = params.get("trade_ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)):
+        raise RequestError("trade_ids must be a list of trade ids")
+    _ledger().assign_account(profile_id, str(params.get("account") or ""), ids)
+    return {**_ledger_state(profile_id),
+            "settings": _settings_to_json(_ledger().settings(profile_id))}
 
 
 def m_ledger_undo(params: JSON) -> JSON:
@@ -636,6 +740,10 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "ledger_save_settings": m_ledger_save_settings,
     "ledger_mark_filed": m_ledger_mark_filed,
     "ledger_backup": m_ledger_backup,
+    "ledger_add_transfer": m_ledger_add_transfer,
+    "ledger_remove_transfer": m_ledger_remove_transfer,
+    "ledger_rename_account": m_ledger_rename_account,
+    "ledger_assign_account": m_ledger_assign_account,
     "opening_template": m_opening_template,
     "ledger_add_opening": m_ledger_add_opening,
     "ledger_restore": m_ledger_restore,

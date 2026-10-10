@@ -10,6 +10,9 @@ ACT_2025_URL = (
     "income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
 )
 CBDT_CG_FAQ_URL = "https://www.pib.gov.in/PressReleasePage.aspx?PRID=2036604"
+CBDT_CIRCULAR_768_URL = "https://incometaxindia.gov.in/Communications/Circular/910110000000000355.htm"
+"""CBDT Circular 768 (24-Jun-1998): FIFO for demat holdings applied account-wise, by date of
+entry into the account (text read via a reproduction; official page to be checked, Q-026)."""
 
 
 class Act(StrEnum):

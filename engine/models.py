@@ -42,6 +42,14 @@ class Trade:
     segment: Segment = Segment.EQUITY
     executed_at: datetime | None = None
     """Execution timestamp when the source has one; used to order trades within a day."""
+    account: str | None = None
+    """The demat account (or trading account for F&O) the trade was made in. FIFO runs per
+    account (CBDT Circular 768, brief 0003). None is one unnamed account: with no accounts
+    named, matching is the same as before accounts existed."""
+    entered_on: date | None = None
+    """For a purchase that came in from another of the user's accounts (an opening holding
+    "moved from another demat account"): the date it entered this account. FIFO queues by
+    that date while the holding period runs from ``trade_date`` (Q-026)."""
 
     def __post_init__(self) -> None:
         for name in ("quantity", "price", "charges", "stt"):
@@ -106,6 +114,15 @@ class Lot:
     split_factor: Decimal = Decimal(1)
     """Shares per share held on 31-Jan-2018, from splits/consolidations after that date. The
     published 31-Jan-2018 FMV is divided by this for grandfathering (Q-006)."""
+    account: str | None = None
+    entered_on: date | None = None
+    """When the lot entered its current account, if not on ``acquired_on`` (moved in from
+    another of the user's accounts). FIFO order follows this (Circular 768)."""
+
+    @property
+    def entry(self) -> date:
+        """The date FIFO orders by: entry into the account."""
+        return self.entered_on or self.acquired_on
 
     def __post_init__(self) -> None:
         for name in ("quantity", "value", "charges", "stt"):
@@ -177,8 +194,35 @@ class Disposal:
     segment: Segment = Segment.EQUITY
     stripped_loss: Decimal = Decimal(0)
     """Loss ignored under the bonus-stripping rule (moved into the bonus shares' cost)."""
+    account: str | None = None
 
     @property
     def gain(self) -> Decimal:
         """Gain before grandfathering; a bonus-stripped loss is added back (so it is ignored)."""
         return self.sale_value - self.transfer_expenses - self.cost + self.stripped_loss
+
+
+@dataclass(frozen=True, slots=True)
+class Transfer:
+    """Shares moved between two of the user's own demat accounts (brief 0003 C).
+
+    Not a transfer for capital gains, since the owner doesn't change (reading of 1961 Act
+    s.2(47); the 2025 Act definition is still to be checked, Q-026): the lots keep their purchase
+    date and cost. They leave ``from_account`` FIFO and queue in
+    ``to_account`` by the date they arrive (CBDT Circular 768: "the basis for determining the
+    movement out of the account is the date of entry into the account").
+    """
+
+    transfer_id: str
+    on: date
+    instrument: str
+    quantity: Decimal
+    from_account: str | None
+    to_account: str | None
+
+    def __post_init__(self) -> None:
+        require_decimal("quantity", self.quantity)
+        if self.quantity <= 0:
+            raise ValueError(f"{self.transfer_id}: quantity must be positive")
+        if self.from_account == self.to_account:
+            raise ValueError(f"{self.transfer_id}: the two accounts must differ")

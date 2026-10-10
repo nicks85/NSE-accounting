@@ -9,7 +9,7 @@ import pytest
 
 from engine.api import FundClass, compute_tax_years
 from engine.ledger import Batch, Ledger, LedgerError
-from engine.ledger.migrations import V1
+from engine.ledger.migrations import LATEST, V1
 from engine.ledger.settings import ManualBuy, Settings
 from engine.rules.setoff import LossEntry, LossKind
 from tests.golden.helpers import DEBT_FUND, A, buy, d, mf, sell
@@ -149,7 +149,7 @@ def test_a_version_1_ledger_is_upgraded_keeping_its_trades(tmp_path: Path) -> No
         db.execute("INSERT INTO profile VALUES (1, 'Old', '2026-10-01')")
     db.close()
     with Ledger.open(path) as ledger:
-        assert ledger.schema_version() == 2
+        assert ledger.schema_version() == LATEST
         ledger.save_settings(1, Settings(fund_classes={DEBT_FUND: FundClass.SPECIFIED},
                                          guessed=frozenset({DEBT_FUND})))
         assert ledger.settings(1).guessed == {DEBT_FUND}

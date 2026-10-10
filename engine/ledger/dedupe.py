@@ -12,6 +12,7 @@
 """
 
 import hashlib
+import re
 from collections import Counter
 from collections.abc import Sequence
 from decimal import Decimal
@@ -20,7 +21,14 @@ from engine.models import Trade
 
 ID_LESS_PREFIXES = ("CAS:", "OPENING:")
 """Trade-id prefixes whose ids are positions in a file or form, not broker trade numbers: the
-CAS, and opening holdings (the same lot entered twice is one lot)."""
+CAS, and opening holdings (the same lot entered twice is one lot). For a lot in a named demat
+account, the account and its arrival date are part of what makes it the same lot."""
+
+
+def account_key(name: str) -> str:
+    """What identifies an account name: letters and digits, ignoring case. "ICICI Direct",
+    "icici-direct" and "ICICIDIRECT" are one account (brief 0003)."""
+    return re.sub(r"[^0-9a-z]", "", name.lower())
 
 
 def _number(value: Decimal) -> str:
@@ -43,6 +51,10 @@ def dedupe_keys(trades: Sequence[Trade]) -> list[str]:
         if trade.trade_id.startswith(ID_LESS_PREFIXES):
             combination = (*details(trade),
                            trade.executed_at.isoformat() if trade.executed_at else "")
+            if trade.account or trade.entered_on:
+                # One purchase split across two demat accounts is two lots (brief 0003).
+                combination = (*combination, account_key(trade.account or ""),
+                               trade.entered_on.isoformat() if trade.entered_on else "")
             seen[combination] += 1
             text = "|".join((*combination, str(seen[combination])))
             keys.append("H|" + hashlib.sha256(text.encode()).hexdigest())

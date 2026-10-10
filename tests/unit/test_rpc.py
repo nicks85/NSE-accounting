@@ -212,7 +212,7 @@ def test_compute_reports_missing_history_and_exclusions() -> None:
     assert report["complete"] is False
     assert report["missing_history"] == [{
         "trade_id": "S9", "instrument": A, "isin": A, "sold_on": "2025-06-01", "quantity": "5",
-        "price": "300", "sale_value": "1500", "segment": "EQUITY"}]
+        "price": "300", "sale_value": "1500", "segment": "EQUITY", "account": None}]
     excluded = ok("compute", year=2025, trades=[sale], excluded=["S9"])
     assert excluded["complete"] is True and excluded["missing_history"] == []
     assert excluded["excluded_sales"][0]["trade_id"] == "S9"
@@ -438,3 +438,83 @@ def test_opening_holdings_from_the_form_and_the_template(ledger_dir: Path) -> No
         "import", broker="opening",
         files=[{"name": "a", "data_base64": b64("x")}, {"name": "b", "data_base64": b64("y")}]
     )["error"]["message"]
+
+
+def test_accounts_and_transfers_over_rpc(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    zerodha = ok("ledger_import", profile_id=person, broker="zerodha",
+                 files=[zerodha_file("z.csv", APRIL)])
+    assert zerodha["accounts"] == ["Zerodha"] and zerodha["transfers"] == []
+    assert {t["account"] for t in zerodha["trades"]} == {"Zerodha"}
+    groww = ok("ledger_import", profile_id=person, broker="zerodha", account="Groww",
+               files=[zerodha_file("g.csv", [Row("SYNTHA", "2025-05-02", "sell", "15", "120")])])
+    assert groww["accounts"] == ["Zerodha", "Groww"]
+    isin = zerodha["trades"][0]["instrument"]
+    gap = ok("compute", year=2025, trades=groww["trades"])["missing_history"][0]
+    assert (gap["account"], gap["quantity"]) == ("Groww", "15")
+
+    too_many = call("ledger_add_transfer", profile_id=person, on="2025-04-10",
+                    instrument=isin, quantity="16", from_account="Zerodha", to_account="Groww")
+    assert "held 15" in too_many["error"]["message"]
+    early = call("ledger_add_transfer", profile_id=person, on="2025-04-02",
+                 instrument=isin, quantity="1", from_account="Zerodha", to_account="Groww")
+    assert "held 0" in early["error"]["message"]  # the 2-Apr buy isn't in the account yet
+    state = ok("ledger_add_transfer", profile_id=person, on="2025-04-10", instrument=isin,
+               quantity="15", from_account="Zerodha", to_account="Groww")
+    [move] = state["transfers"]
+    assert (move["from_account"], move["to_account"], move["quantity"]) == (
+        "Zerodha", "Groww", "15")
+    report = ok("compute", year=2025, trades=state["trades"], transfers=state["transfers"])
+    assert report["complete"] and {line["account"] for line in report["capital_gains"]} == {
+        "Groww"}
+    assert report["open_lots"] == []
+
+    renamed = ok("ledger_rename_account", profile_id=person, old="Groww", new="Groww India")
+    assert renamed["transfers"][0]["to_account"] == "Groww India"
+    removed = ok("ledger_remove_transfer", profile_id=person, transfer_id=move["transfer_id"])
+    assert removed["transfers"] == []
+    assert "TRANSFER:<number>" in call("ledger_remove_transfer", profile_id=person,
+                                       transfer_id="7")["error"]["message"]
+    assert "both accounts" in call("ledger_add_transfer", profile_id=person, on="2025-04-10",
+                                   instrument=isin, quantity="1", from_account="Zerodha",
+                                   to_account=" ")["error"]["message"]
+    assert "transfers must be a list" in call("compute", year=2025, trades=[],
+                                              transfers="x")["error"]["message"]
+    assert "transfer is missing" in call("compute", year=2025, trades=[],
+                                         transfers=[{"on": "2025-01-01"}])["error"]["message"]
+
+
+def test_opening_lots_and_assigning_an_account(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    row = {"isin": "INE000A01012", "quantity": "10", "buy_date": "2016-04-01", "price": "100"}
+    added = ok("ledger_add_opening", profile_id=person, rows=[row])
+    assert added["trades"][0]["account"] is None
+    assigned = ok("ledger_assign_account", profile_id=person, account="Zerodha")
+    assert assigned["trades"][0]["account"] == "Zerodha"
+    in_groww = ok("ledger_add_opening", profile_id=person, account="Groww",
+                  rows=[{**row, "buy_date": "2017-04-03"}])
+    assert {t["account"] for t in in_groww["trades"]} == {"Zerodha", "Groww"}
+
+
+def test_transfer_and_assign_details_over_rpc(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("z.csv", APRIL)])
+    again = ok("ledger_import", profile_id=person, broker="zerodha", account="Groww",
+               files=[zerodha_file("z.csv", APRIL)])
+    assert again["files"][0]["imported_into"] == "Zerodha"
+    isin = again["trades"][0]["instrument"]
+    unknown = call("ledger_add_transfer", profile_id=person, on="2025-04-10", instrument=isin,
+                   quantity="1", from_account="Upstox", to_account="Zerodha")
+    assert "no account called 'Upstox'" in unknown["error"]["message"]
+    moved = ok("ledger_add_transfer", profile_id=person, on="2025-04-10", instrument=isin,
+               quantity="1", from_account="ZERODHA", to_account="groww")
+    assert moved["transfers"][0]["from_account"] == "Zerodha"
+    renamed = ok("ledger_rename_account", profile_id=person, old="groww", new="Groww")
+    assert "settings" in renamed and renamed["transfers"][0]["to_account"] == "Groww"
+    row = {"isin": "INE000A01012", "quantity": "10", "buy_date": "2016-04-01", "price": "100"}
+    lot = ok("ledger_add_opening", profile_id=person, rows=[row])
+    lot_id = next(t["trade_id"] for t in lot["trades"] if t["trade_id"].startswith("OPENING:"))
+    assigned = ok("ledger_assign_account", profile_id=person, account="Groww", trade_ids=[lot_id])
+    assert next(t["account"] for t in assigned["trades"] if t["trade_id"] == lot_id) == "Groww"
+    assert "trade_ids must be" in call("ledger_assign_account", profile_id=person,
+                                       account="Groww", trade_ids="x")["error"]["message"]

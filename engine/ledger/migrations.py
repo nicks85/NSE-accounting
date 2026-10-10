@@ -149,7 +149,44 @@ ALTER TABLE instrument_setting ADD COLUMN fund_class_guessed INTEGER NOT NULL DE
 ALTER TABLE trade ADD COLUMN resolves_source_id TEXT;
 """
 
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1), (2, V2))
+V3 = """
+-- Brief 0003: FIFO per demat account, and transfers between one's own accounts.
+-- An opening lot moved in from another of the user's accounts: the date it entered this one.
+ALTER TABLE trade ADD COLUMN entered_on TEXT;
+
+CREATE TABLE transfer (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  on_date TEXT NOT NULL,
+  instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+  quantity TEXT NOT NULL,
+  from_account_id INTEGER NOT NULL REFERENCES account(id),
+  to_account_id INTEGER NOT NULL REFERENCES account(id),
+  created_at TEXT NOT NULL,
+  CHECK (from_account_id <> to_account_id)
+);
+
+-- Trades saved before accounts existed: one account per broker, named after it.
+INSERT INTO account (profile_id, broker, label)
+  SELECT DISTINCT profile_id, broker,
+         CASE broker WHEN 'zerodha' THEN 'Zerodha' WHEN 'upstox' THEN 'Upstox'
+                     WHEN 'angelone' THEN 'Angel One' ELSE broker END
+  FROM import_batch
+  WHERE kind = 'tradebook' AND broker IS NOT NULL AND broker <> '' AND undone_at IS NULL;
+UPDATE import_batch SET account_id = (
+    SELECT a.id FROM account a
+    WHERE a.profile_id = import_batch.profile_id AND a.broker = import_batch.broker)
+  WHERE kind = 'tradebook';
+UPDATE trade SET account_id = (SELECT b.account_id FROM import_batch b WHERE b.id = trade.batch_id)
+  WHERE segment <> 'MF';
+-- Opening holdings and hand-entered purchases go to the person's only account, if there is
+-- exactly one; otherwise they stay unassigned and the app asks.
+UPDATE trade SET account_id = (SELECT a.id FROM account a WHERE a.profile_id = trade.profile_id)
+  WHERE account_id IS NULL AND segment <> 'MF'
+    AND (SELECT COUNT(*) FROM account a WHERE a.profile_id = trade.profile_id) = 1;
+"""
+
+MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1), (2, V2), (3, V3))
 """(schema version, SQL) in order. The latest version is the last entry's."""
 
 LATEST = MIGRATIONS[-1][0]

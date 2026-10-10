@@ -6,7 +6,8 @@ business income → set-off / exemption / carry-forward → special-rate tax.
 """
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
 
@@ -23,7 +24,7 @@ from engine.classify.trades import (
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
 from engine.matching.fifo import Shortfall, match_fifo
-from engine.models import Disposal, Lot, Segment, Trade
+from engine.models import Disposal, Lot, Segment, Trade, Transfer
 from engine.money import ZERO
 from engine.notices import Notice
 from engine.rules import common, pack_for_year
@@ -38,9 +39,11 @@ __all__ = [
     "Notice",
     "Shortfall",
     "TaxYearReport",
+    "Transfer",
     "compute_tax_year",
     "compute_tax_years",
     "engine_version",
+    "held_on",
     "unclassified_funds",
 ]
 
@@ -113,6 +116,7 @@ def compute_tax_year(
     brought_forward: Iterable[LossEntry] = (),
     excluded: Iterable[str] = (),
     late_returns: Iterable[int] = (),
+    transfers: Iterable[Transfer] = (),
 ) -> TaxYearReport:
     """Compute one tax year (``start_year`` 2024 → FY 2024-25).
 
@@ -129,6 +133,9 @@ def compute_tax_year(
     date. A loss carries forward only if determined in a return filed on time (2025 Act
     s.121; 1961 Act s.80 with s.139(3)), so brought-forward losses from those years are not
     set off, and this year's losses are flagged as not carrying forward if this year is one.
+
+    Trades carry the demat account they were made in, and FIFO runs per account (CBDT
+    Circular 768; brief 0003). ``transfers`` move shares between the user's own accounts.
     """
     pack = pack_for_year(start_year)
     late = set(late_returns)
@@ -136,12 +143,14 @@ def compute_tax_year(
     lapsed = tuple(e for e in offered if e.origin_year in late)
     brought_forward = [e for e in offered if e.origin_year not in late]
     _, year_end = tax_year_bounds(start_year)
-    history = [t for t in trades if t.trade_date <= year_end]
+    # A lot moved in from another account is part of the year from the day it arrived.
+    history = [t for t in trades if (t.entered_on or t.trade_date) <= year_end]
     action_list = [a for a in actions if a.ex_date <= year_end]
+    moves = [t for t in transfers if t.on <= year_end]
 
     classified = classify_trades(history)
     delivery = match_fifo(classified.delivery, opening_lots, action_list,
-                          collect_shortfalls=True)
+                          collect_shortfalls=True, transfers=moves)
     intraday = match_fifo(classified.intraday, allow_short=True)
     fno = match_fifo(classified.fno)
     warnings = [
@@ -191,6 +200,12 @@ def compute_tax_year(
         used.append(common.SETOFF_ORDER)
     if result.carried_forward or lapsed:
         used.append(common.RETURN_OF_LOSS)
+    held_in = {t.account for t in classified.delivery if t.segment is Segment.EQUITY}
+    if len(held_in) > 1 or moves:
+        used.append(common.FIFO_PER_ACCOUNT)
+        # Each sale's "why?" shows the per-account rule next to the general FIFO one.
+        lines = [replace(line, citations=(*line.citations, common.FIFO_PER_ACCOUNT))
+                 if line.disposal.segment is Segment.EQUITY else line for line in lines]
     unverified = tuple(dict.fromkeys(c for c in used if c.unverified))
     warnings += [
         Notice("UNVERIFIED", f"{c.topic} (best guess; see docs/OPEN_QUESTIONS.md "
@@ -240,6 +255,21 @@ def compute_tax_year(
             f"Excludes {len(left_out)} sale(s) with ₹{value:.2f} of sale value whose purchase "
             "history is missing; gains for this year are understated by whatever those sales "
             "made.", question="Q-031"))
+    if None in held_in and len(held_in) > 1:
+        unnamed = sorted({t.instrument for t in classified.delivery
+                          if t.account is None and t.segment is Segment.EQUITY})
+        warnings.append(Notice(
+            "NO_ACCOUNT",
+            f"Some share trades aren't in a demat account yet ({', '.join(unnamed)}). FIFO runs "
+            "per account, so they're matched only with each other until you put them in the "
+            "right account on the Holdings screen.", question="Q-026"))
+    for move, gap in delivery.transfer_gaps:
+        warnings.append(Notice(
+            "TRANSFER_SHORT",
+            f"Moving {move.quantity} {move.instrument} on {move.on} from "
+            f"{move.from_account or 'the unnamed account'}: only {move.quantity - gap} were "
+            "held there, so only those moved. Import the older purchases into that account, or "
+            "correct the transfer.", question="Q-026"))
     manual = [t for t in history if t.trade_id.startswith(MANUAL_PREFIX)]
     if manual:
         warnings.append(Notice(
@@ -298,13 +328,14 @@ def compute_tax_years(
     brought_forward: Iterable[LossEntry] = (),
     excluded: Iterable[str] = (),
     late_returns: Iterable[int] = (),
+    transfers: Iterable[Transfer] = (),
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next.
 
     A fund's class can change between years (the meaning of "specified fund" changed in
     FY 2025-26): ``fund_classes_by_year[year]`` overrides ``fund_classes`` for that year."""
     trade_list, lot_list, action_list = list(trades), list(opening_lots), list(actions)
-    excluded_list, late = list(excluded), list(late_returns)
+    excluded_list, late, moves = list(excluded), list(late_returns), list(transfers)
     years = sorted(start_years)
     if years and years != list(range(years[0], years[-1] + 1)):
         raise ValueError(f"tax years must be consecutive to carry losses forward: {years}")
@@ -316,10 +347,23 @@ def compute_tax_years(
                                   fund_classes={**(fund_classes or {}),
                                                 **(fund_classes_by_year or {}).get(year, {})},
                                   brought_forward=carried, excluded=excluded_list,
-                                  late_returns=late)
+                                  late_returns=late, transfers=moves)
         reports.append(report)
         carried = list(report.carried_forward)
     return reports
+
+
+def held_on(trades: Iterable[Trade], transfers: Iterable[Transfer], account: str | None,
+            instrument: str, on: date, *, actions: Iterable[CorporateAction] = ()) -> Decimal:
+    """Shares of ``instrument`` held in ``account`` at the start of ``on``: trades before that
+    day, and transfers up to and including it (transfers come before trades on a day)."""
+    history = [t for t in trades if (t.entered_on or t.trade_date) < on]
+    delivery = classify_trades(history).delivery
+    result = match_fifo(delivery, (), [a for a in actions if a.ex_date <= on],
+                        collect_shortfalls=True, transfers=[t for t in transfers if t.on <= on])
+    return sum((lot.quantity for lot in result.open_lots
+                if lot.account == account and lot.instrument == instrument and lot.is_long),
+               ZERO)
 
 
 def unclassified_funds(trades: Iterable[Trade], fund_classes: Mapping[str, FundClass]
