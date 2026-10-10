@@ -313,7 +313,8 @@ SETTINGS = {
 def test_ledger_settings_round_trip_and_profiles(ledger_dir: Path) -> None:
     me = ok("ledger_profile")
     assert me["settings"] == {"fund_classes": {}, "unconfirmed": [], "fmv_2018": {}, "names": {},
-                              "brought_forward": [], "manual_buys": [], "excluded": []}
+                              "brought_forward": [], "manual_buys": [], "excluded": [],
+                              "filed_on_time": {}}
     person = me["profile"]["id"]
     ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
     saved = ok("ledger_save_settings", profile_id=person, settings=SETTINGS)["settings"]
@@ -340,3 +341,48 @@ def test_ledger_settings_are_checked(ledger_dir: Path, settings: object, message
     person = ok("ledger_profile")["profile"]["id"]
     error = call("ledger_save_settings", profile_id=person, settings=settings)["error"]
     assert message in error["message"]
+
+
+def test_compute_reports_filing_and_changes(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    trades = [trade_to_json(t)
+              for t in (buy("2025-05-01", 100, 1000), sell("2025-07-01", 100, 1100))]
+    assert ok("compute", year=2025, trades=trades, profile_id=person)["filing"] is None
+    assert "filing" not in ok("compute", year=2025, trades=trades)
+    filed = ok("ledger_mark_filed", profile_id=person, year=2025, trades=trades, itr_form="ITR-2")
+    now = ok("compute", year=2025, trades=trades, profile_id=person)["filing"]
+    assert (now["filed_at"], now["itr_form"], now["changes"]) == (filed["filed_at"], "ITR-2", [])
+    more = [*trades, trade_to_json(sell("2025-08-01", 1, 1, trade_id="S2"))]
+    excluded = ok("compute", year=2025, trades=more, excluded=["S2"], profile_id=person)
+    assert excluded["filing"]["changes"] == []  # an excluded sale changes no figure
+    late = ok("compute", year=2025, trades=trades, profile_id=person, late_returns=[2024],
+              brought_forward=[{"origin_year": 2024, "kind": "Short-term capital loss",
+                                "amount": "4000"}])
+    assert late["filing"]["changes"] == []
+    ok("ledger_unmark_filed", profile_id=person, year=2025)
+    assert ok("compute", year=2025, trades=trades, profile_id=person)["filing"] is None
+
+
+def test_filed_on_time_settings_round_trip(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    saved = ok("ledger_save_settings", profile_id=person,
+               settings={"filed_on_time": {"2024": False, "2023": True}})["settings"]
+    assert saved["filed_on_time"] == {"2023": True, "2024": False}
+    bad = call("ledger_save_settings", profile_id=person, settings={"filed_on_time": {"x": True}})
+    assert "malformed" in bad["error"]["message"]
+
+
+def test_mark_filed_refuses_figures_that_changed_on_screen(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    trades = [trade_to_json(t)
+              for t in (buy("2025-05-01", 100, 1000), sell("2025-07-01", 100, 1100))]
+    shown = ok("compute", year=2025, trades=trades[:1])
+    refused = call("ledger_mark_filed", profile_id=person, year=2025, trades=trades, shown=shown)
+    assert "changed while you were looking" in refused["error"]["message"]
+    shown = ok("compute", year=2025, trades=trades)
+    assert ok("ledger_mark_filed", profile_id=person, year=2025, trades=trades, shown=shown)
+    late = ok("compute", year=2025, trades=trades, late_returns=[2025])
+    assert late["lapsed"] == [] and late["not_carried"] == []
+    bad = call("ledger_mark_filed", profile_id=person, year=2025, trades=trades,
+               shown={"summary": {}})
+    assert "malformed" in bad["error"]["message"]

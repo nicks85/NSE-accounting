@@ -120,6 +120,7 @@ def _compute_inputs(params: JSON) -> tuple[int, dict[str, Any]]:
         "fund_classes": {isin: FundClass(v) for isin, v in params.get("fund_classes", {}).items()},
         "brought_forward": _losses(params.get("brought_forward", [])),
         "excluded": [str(t) for t in params.get("excluded", [])],
+        "late_returns": [int(y) for y in params.get("late_returns", [])],
     }
 
 
@@ -157,6 +158,11 @@ def _lot(lot: Lot) -> JSON:
     return {"instrument": lot.instrument, "isin": isin_of(lot.instrument),
             "acquired_on": lot.acquired_on.isoformat(), "quantity": _s(lot.quantity),
             "cost": _s(lot.cost), "segment": lot.segment.value}
+
+
+def _loss(entry: LossEntry) -> JSON:
+    return {"origin_year": entry.origin_year, "kind": entry.kind.value,
+            "amount": _s(entry.amount)}
 
 
 def _shortfall(gap: Shortfall) -> JSON:
@@ -219,8 +225,9 @@ def report_to_json(report: TaxYearReport) -> JSON:
         "setoff_steps": [{"loss": st.loss, "against": st.against, "amount": _s(st.amount),
                           "citation": citation_to_json(st.citation, report)}
                          for st in report.setoff.steps],
-        "carried_forward": [{"origin_year": e.origin_year, "kind": e.kind.value,
-                             "amount": _s(e.amount)} for e in report.carried_forward],
+        "carried_forward": [_loss(e) for e in report.carried_forward],
+        "lapsed": [_loss(e) for e in report.lapsed],
+        "not_carried": [_loss(e) for e in report.not_carried],
         "expired": [{"origin_year": e.origin_year, "kind": e.kind.value, "amount": _s(e.amount)}
                     for e in report.setoff.expired],
         "open_lots": [_lot(lot) for lot in report.open_lots],
@@ -353,6 +360,7 @@ def _settings_to_json(settings: Any) -> JSON:
         "manual_buys": [{"trade": trade_to_json(m.trade), "how": m.how, "for_trade": m.for_trade}
                         for m in settings.manual_buys],
         "excluded": list(settings.excluded),
+        "filed_on_time": {str(y): v for y, v in settings.filed_on_time.items()},
     }
 
 
@@ -374,9 +382,17 @@ def _settings_from_json(data: Any) -> Any:
                                         str(m["for_trade"]))
                               for m in data.get("manual_buys", [])),
             excluded=tuple(str(e) for e in data.get("excluded", [])),
+            filed_on_time={_year(y): bool(v) for y, v in data.get("filed_on_time", {}).items()},
         )
     except (KeyError, TypeError, AttributeError) as error:
         raise RequestError(f"settings are malformed: {error}") from None
+
+
+def _year(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise RequestError(f"settings are malformed: {value!r} is not a tax year") from None
 
 
 def _profiles() -> list[JSON]:
@@ -467,7 +483,48 @@ def m_ledger_undo(params: JSON) -> JSON:
 
 
 def m_compute(params: JSON) -> JSON:
-    return report_to_json(_report(params))
+    """The year's report. With a ``profile_id`` it also says whether the year was marked
+    filed and lists every figure that changed since (task 4)."""
+    report = report_to_json(_report(params))
+    if params.get("profile_id") is not None:
+        report["filing"] = _filing(_profile_id(params), int(params["year"]), report)
+    return report
+
+
+def _filing(profile_id: int, year: int, report: JSON) -> JSON | None:
+    from engine.ledger.filing import changes
+
+    filed = _ledger().filed(profile_id, year)
+    if filed is None:
+        return None
+    return {"filed_at": filed.filed_at, "itr_form": filed.itr_form,
+            "engine_version": filed.engine_version, "changes": changes(filed.report, report)}
+
+
+def m_ledger_mark_filed(params: JSON) -> JSON:
+    """Mark the year as filed, keeping its figures as computed from these inputs."""
+    from engine.ledger.filing import changes
+
+    profile_id = _profile_id(params)
+    report = report_to_json(_report(params))
+    shown = params.get("shown")
+    if shown is not None:
+        try:
+            moved = changes(shown, report)
+        except (KeyError, TypeError, AttributeError, ArithmeticError):
+            raise RequestError("the report shown is malformed") from None
+        if moved:
+            raise RequestError("the figures changed while you were looking at them; check the "
+                               "updated figures and mark the year as filed again")
+    form = params.get("itr_form")
+    when = _ledger().mark_filed(profile_id, int(params["year"]), report,
+                                str(form) if form else None)
+    return {"filed_at": when}
+
+
+def m_ledger_unmark_filed(params: JSON) -> JSON:
+    _ledger().unmark_filed(_profile_id(params), int(params["year"]))
+    return {}
 
 
 def m_unclassified(params: JSON) -> JSON:
@@ -508,6 +565,8 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "ledger_profile": m_ledger_profile,
     "ledger_profiles": m_ledger_profiles,
     "ledger_save_settings": m_ledger_save_settings,
+    "ledger_mark_filed": m_ledger_mark_filed,
+    "ledger_unmark_filed": m_ledger_unmark_filed,
     "ledger_state": m_ledger_state,
     "ledger_import": m_ledger_import,
     "ledger_undo": m_ledger_undo,

@@ -576,3 +576,28 @@ Five sheets:
   ignoring case. Renaming and deleting people aren't built yet.
 - **Not done here:** the "return filed on time" flag (Q-011) has no screen yet. It moves to
   task 4 with the filed-year freeze.
+
+### Task 4 — filed years and returns filed on time (2026-10-10, approved)
+
+- **Return filed on time (Q-011):**
+  - On the Losses screen, the user answers per tax year: yes, no, or not sure. The years asked
+    are each year with a brought-forward loss, plus the year shown. The answer is saved with
+    the person's settings (`year_setting.return_filed_on_time`).
+  - **Filed late:** that year's losses aren't set off in later years (`LOSS_LAPSED`), and the
+    year's own losses are flagged as not carrying forward (`NOT_CARRIED`).
+  - **Not sure:** keeps the existing UNVERIFIED warning.
+  - **Engine:** `compute_tax_year(..., late_returns=...)`.
+- **Mark as filed (Export screen):**
+  - Keeps the year's report exactly as computed then, in `year_snapshot`, with the ITR form
+    chosen.
+  - A year with sales missing purchase history can't be marked filed.
+  - Unmarking takes two clicks and forgets the filed figures.
+- **Changed since filing:**
+  - Every report computed for a person carries `filing`: when the year was filed, and every
+    figure that changed since, as filed and now.
+  - The compared figures are the summary, the carried-forward losses, and the counts of
+    capital-gain and business lines.
+  - Gains and Export show a prominent notice listing the changes. As answered for question
+    9, nothing is blocked.
+- **Year snapshots as a cache** (D2) aren't used: replay takes about 1.3 s for 20,000
+  trades, so caching can wait until it's needed.

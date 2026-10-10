@@ -27,7 +27,7 @@ HIDDEN_IMPORTS = [
     "engine.export.pdf", "engine.export.schemas_registry", "engine.export.skeleton",
     "engine.export.schemas", "engine.ledger", "engine.ledger.store", "engine.ledger.dedupe",
     "engine.ledger.migrations", "engine.ledger.paths", "engine.ledger.settings",
-    "importers.angel_one",
+    "engine.ledger.filing", "importers.angel_one",
     "msoffcrypto.format.ooxml", "casparser.parsers.cams_detailed",
 ]
 DATA_PACKAGES = ["engine.export.schemas", "reportlab", "casparser", "casparser_isin",

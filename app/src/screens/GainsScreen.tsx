@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { inr, isZero, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
+import { FiledChanges, inr, isZero, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
 import { useSession, type FundClass } from "../state";
 import { MissingHistory } from "./MissingHistory";
 
@@ -180,6 +180,7 @@ export function GainsScreen() {
       {state.status === "ready" && (
         <>
           {state.stale && <p className="muted" aria-live="polite">Updating…</p>}
+          <FiledChanges filing={state.report.filing} />
           <NeedsInput report={state.report} unclassified={state.unclassified} />
           <MissingHistory report={state.report} />
 
