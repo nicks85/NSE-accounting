@@ -139,7 +139,17 @@ CREATE TABLE statement_entry (
 );
 """
 
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1),)
+V2 = """
+-- Task 3: settings kept in the ledger instead of page memory.
+-- A fund class pre-filled from a CAS guess stays marked until the user confirms it.
+ALTER TABLE instrument_setting ADD COLUMN fund_class_guessed INTEGER NOT NULL DEFAULT 0;
+-- A hand-entered purchase names the sale it resolves by the sale's engine trade id. The V1
+-- integer link to trade(id) has no ON DELETE action, so it would block undoing that sale's
+-- import; it stays unused.
+ALTER TABLE trade ADD COLUMN resolves_source_id TEXT;
+"""
+
+MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1), (2, V2))
 """(schema version, SQL) in order. The latest version is the last entry's."""
 
 LATEST = MIGRATIONS[-1][0]
