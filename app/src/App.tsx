@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent, type ReactElement } from "react";
 import { rpc } from "./engine";
 import { ReportProvider } from "./report";
-import { LedgerLoader, SessionProvider } from "./state";
+import { LedgerLoader, ProfileSwitcher, SessionProvider } from "./state";
 import "./styles.css";
 
 export const TABS = [
@@ -50,6 +50,7 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
         <header className="header">
           <h1>Kosh</h1>
           <p className="tagline">Offline Indian share-market tax calculator. Your data never leaves your computer.</p>
+          <ProfileSwitcher />
         </header>
         <nav className="tabs" role="tablist" aria-label="Sections" onKeyDown={onTabKey}>
           {TABS.map((t) => (

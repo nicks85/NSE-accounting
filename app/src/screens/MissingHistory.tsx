@@ -156,7 +156,7 @@ export function MissingHistory({ report }: { report: Report }) {
           {excluded.length > 0 && <p className="muted">Left out of this year's figures: {excluded.length} sale(s), {inr(report.excluded_value)} of sale value.</p>}
           <ul>
             {session.excluded.map((id) => {
-              const gap = excluded.find((g) => g.trade_id === id);
+              const gap = excluded.find((g) => g.trade_id === id || g.trade_id === `${id}#delivery`);
               return (
                 <li key={id}>
                   {gap ? <>{session.names[gap.isin] ?? gap.instrument}, sold {gap.sold_on}: {qty(gap.quantity)} for {inr(gap.sale_value)}</> : <>Sale {id} (not in this year: another tax year, or its purchase has since been found)</>}{" "}

@@ -109,7 +109,7 @@ async function reload(profileId: number | null, update: ReturnType<typeof useSes
   try {
     const { trades, batches } = await rpc<LedgerState>("ledger_state", { profile_id: profileId });
     if (!Array.isArray(trades) || !Array.isArray(batches)) return;
-    update((current) => ({ trades, batches, ...forgetRemoved(current, trades) }));
+    update((current) => (current.profileId !== profileId ? {} : { trades, batches, ...forgetRemoved(current, trades) }));
   } catch {
     // the error already shown is the useful one
   }
@@ -130,14 +130,19 @@ function History() {
   const [confirming, setConfirming] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   async function undo(batch: ImportBatch) {
+    const profileId = session.profileId;
     setError(null);
+    update({ working: true });
     try {
-      const result = await rpc<LedgerState>("ledger_undo", { profile_id: session.profileId, batch_id: batch.id });
-      update((current) => ({ trades: result.trades, batches: result.batches, ...forgetRemoved(current, result.trades) }));
+      const result = await rpc<LedgerState>("ledger_undo", { profile_id: profileId, batch_id: batch.id });
+      // A reply for another person (switched while waiting) must never touch this session.
+      update((current) => (current.profileId !== profileId ? {}
+        : { trades: result.trades, batches: result.batches, ...forgetRemoved(current, result.trades) }));
     } catch (e) {
       setError((e as Error).message);
-      await reload(session.profileId, update);
+      await reload(profileId, update);
     } finally {
+      update({ working: false });
       setConfirming(null);
     }
   }
@@ -204,7 +209,9 @@ export function ImportScreen() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const profileId = session.profileId;
     setBusy(true);
+    update({ working: true });
     setError(null);
     try {
       const params = {
@@ -215,10 +222,12 @@ export function ImportScreen() {
           ? { mapping, key: brokerName.toUpperCase().replace(/[^A-Z0-9]/g, "") || "MAPPED", source: `${brokerName} (mapped)` }
           : {}),
       };
-      if (session.profileId === null) throw new Error("your saved data hasn't loaded yet");
-      const result = await rpc<ImportResult>("ledger_import", { ...params, profile_id: session.profileId });
-      // Merge against the latest state, not the one captured before the await.
+      if (profileId === null) throw new Error("your saved data hasn't loaded yet");
+      const result = await rpc<ImportResult>("ledger_import", { ...params, profile_id: profileId });
+      // Merge against the latest state, not the one captured before the await, and never into
+      // another person's session.
       update((current) => {
+        if (current.profileId !== profileId) return {};
         const guessed = Object.keys(result.suggested_classes).filter((isin) => !(isin in current.fundClasses));
         return {
           trades: result.trades,
@@ -234,9 +243,10 @@ export function ImportScreen() {
       setInputKey((k) => k + 1); // so the same file can be chosen again
     } catch (e) {
       setError((e as Error).message);
-      await reload(session.profileId, update);  // the ledger is the truth, whatever failed
+      await reload(profileId, update);  // the ledger is the truth, whatever failed
     } finally {
       setBusy(false);
+      update({ working: false });
     }
   }
 
