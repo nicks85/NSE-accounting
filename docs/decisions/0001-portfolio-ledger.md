@@ -547,3 +547,32 @@ Five sheets:
   the screen reloads from the ledger. Undo also drops hand-entered purchases and exclusions
   for sales that are no longer saved.
 - **CAS reversal of a purchase saved from an older CAS:** not handled yet; logged as Q-036.
+
+### Task 3 — settings in the ledger and several people (2026-10-10, approved)
+
+- **What is saved per person:**
+  - fund classes, including which ones were guessed from a CAS and not yet confirmed
+  - 31-Jan-2018 prices
+  - share and scheme names
+  - brought-forward losses
+  - hand-entered purchases
+  - excluded sales
+- **One save, whole set:** the UI sends the whole set on every change. The engine replaces the
+  stored set in one transaction, so a save can't half-apply. Nothing is saved until a
+  profile has loaded, and loading or switching never saves the old person's settings into the
+  new one.
+- **Schema v2:**
+  - `instrument_setting.fund_class_guessed`.
+  - `trade.resolves_source_id`, the sale a hand-entered purchase was entered for, by engine
+    trade id. The v1 integer link would block undoing that sale's import, so it stays unused.
+- **Hand-entered purchases** are trades in one `manual` batch per person. They aren't imports:
+  they never appear in the import history and can't be undone there.
+- **Undoing an import** also removes the purchases entered for its sales. Their exclusions are
+  removed with the sales.
+- **Exclusions** are stored against the sale itself. A sale split by same-day trading
+  (`S1#delivery`) is stored and returned as `S1`, which the engine treats as the same.
+- **`Ledger.compute()`** now uses the saved settings. A caller can override any of them.
+- **Profile switcher** in the header: choose a person or add one. Names must be unique,
+  ignoring case. Renaming and deleting people aren't built yet.
+- **Not done here:** the "return filed on time" flag (Q-011) has no screen yet. It moves to
+  task 4 with the filed-year freeze.

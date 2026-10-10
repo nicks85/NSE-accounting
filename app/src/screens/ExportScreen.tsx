@@ -56,7 +56,7 @@ function ShareNames() {
       <legend>Names for Schedule 112A</legend>
       <p className="muted">Holdings bought on or before 31-Jan-2018 are listed one by one with their name. Broker files only give the ISIN.</p>
       {needed.map((isin) => (
-        <div key={isin}>
+        <div key={`${session.profileId}-${isin}`}>
           <label htmlFor={`name-${isin}`}>Name for {isin}</label>
           <input id={`name-${isin}`} maxLength={125} defaultValue={session.names[isin] ?? ""}
             onBlur={(e) => {

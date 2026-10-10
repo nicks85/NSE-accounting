@@ -342,12 +342,67 @@ def _ledger_state(profile_id: int) -> JSON:
             "batches": ledger.batches(profile_id)}
 
 
+def _settings_to_json(settings: Any) -> JSON:
+    return {
+        "fund_classes": {k: v.value for k, v in settings.fund_classes.items()},
+        "unconfirmed": sorted(settings.guessed),
+        "fmv_2018": {k: _s(v) for k, v in settings.fmv_2018.items()},
+        "names": dict(settings.names),
+        "brought_forward": [{"origin_year": e.origin_year, "kind": e.kind.value,
+                             "amount": _s(e.amount)} for e in settings.brought_forward],
+        "manual_buys": [{"trade": trade_to_json(m.trade), "how": m.how, "for_trade": m.for_trade}
+                        for m in settings.manual_buys],
+        "excluded": list(settings.excluded),
+    }
+
+
+def _settings_from_json(data: Any) -> Any:
+    from engine.ledger.settings import ManualBuy, Settings
+
+    if not isinstance(data, dict):
+        raise RequestError("settings must be an object")
+    try:
+        classes = {str(k): FundClass(v) for k, v in data.get("fund_classes", {}).items()}
+        return Settings(
+            fund_classes=classes,
+            guessed=frozenset(str(i) for i in data.get("unconfirmed", []) if i in classes),
+            fmv_2018={str(k): _dec(v, f"31-Jan-2018 price for {k}")
+                      for k, v in data.get("fmv_2018", {}).items()},
+            names={str(k): str(v) for k, v in data.get("names", {}).items() if str(v).strip()},
+            brought_forward=tuple(_losses(data.get("brought_forward", []))),
+            manual_buys=tuple(ManualBuy(trade_from_json(m["trade"]), str(m["how"]),
+                                        str(m["for_trade"]))
+                              for m in data.get("manual_buys", [])),
+            excluded=tuple(str(e) for e in data.get("excluded", [])),
+        )
+    except (KeyError, TypeError, AttributeError) as error:
+        raise RequestError(f"settings are malformed: {error}") from None
+
+
+def _profiles() -> list[JSON]:
+    return [{"id": p.id, "name": p.display_name} for p in _ledger().profiles()]
+
+
 def m_ledger_profile(params: JSON) -> JSON:
-    """Open (or create) the profile named ``name`` (default "Me") and return its state."""
+    """Open (or create) the profile named ``name`` (default "Me") and return its trades,
+    import history and settings, with the list of all profiles."""
     name = str(params.get("name") or "Me")
     profile = _ledger().ensure_profile(name)
     return {"profile": {"id": profile.id, "name": profile.display_name},
+            "profiles": _profiles(),
+            "settings": _settings_to_json(_ledger().settings(profile.id)),
             **_ledger_state(profile.id)}
+
+
+def m_ledger_profiles(_params: JSON) -> JSON:
+    return {"profiles": _profiles()}
+
+
+def m_ledger_save_settings(params: JSON) -> JSON:
+    """Replace the profile's saved settings with ``settings`` (the whole set)."""
+    profile_id = _profile_id(params)
+    _ledger().save_settings(profile_id, _settings_from_json(params.get("settings")))
+    return {"settings": _settings_to_json(_ledger().settings(profile_id))}
 
 
 def m_ledger_state(params: JSON) -> JSON:
@@ -451,6 +506,8 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "export_itr": m_export_itr,
     "export_pdf": m_export_pdf,
     "ledger_profile": m_ledger_profile,
+    "ledger_profiles": m_ledger_profiles,
+    "ledger_save_settings": m_ledger_save_settings,
     "ledger_state": m_ledger_state,
     "ledger_import": m_ledger_import,
     "ledger_undo": m_ledger_undo,

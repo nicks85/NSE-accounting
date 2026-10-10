@@ -106,7 +106,7 @@ function NeedsInput({ report, unclassified }: { report: Report; unclassified: st
           )}
         </div>
       ))}
-      {fmvNeeded.map((isin) => <FmvInput key={isin} isin={isin} missing={!(isin in session.fmv2018)} />)}
+      {fmvNeeded.map((isin) => <FmvInput key={`${session.profileId}-${isin}`} isin={isin} missing={!(isin in session.fmv2018)} />)}
     </section>
   );
 }

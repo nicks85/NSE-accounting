@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_SESSION, LedgerLoader, SessionProvider, useSession, type ImportBatch } from "../state";
+import { EMPTY_SESSION, SessionProvider, useSession, type ImportBatch } from "../state";
 import { ImportScreen } from "./ImportScreen";
 
 const TRADE = {
@@ -225,20 +225,29 @@ describe("ImportScreen state (QA)", () => {
   });
 });
 
-describe("LedgerLoader", () => {
-  it("opens the named profile and loads its trades and history", async () => {
-    localStorage.setItem("kosh.profile", "Synthetic");
-    const calls = engineReplies({ result: { profile: { id: 4, name: "Synthetic" }, trades: [TRADE], batches: [BATCH] } });
-    await act(async () => render(<SessionProvider><LedgerLoader /><Probe /></SessionProvider>));
-    expect(calls[0]).toMatchObject({ method: "ledger_profile", params: { name: "Synthetic" } });
-    await waitFor(() => expect(state()).toMatchObject({ profileId: 4, trades: [TRADE], batches: [BATCH], ledgerError: null }));
-    localStorage.removeItem("kosh.profile");
-  });
-
-  it("uses the default profile and reports a ledger that can't be opened", async () => {
-    const calls = engineReplies({ error: { type: "LedgerError", message: "made by a newer version of Kosh" } });
-    await act(async () => render(<SessionProvider><LedgerLoader /><ImportScreen /><Probe /></SessionProvider>));
-    expect(calls[0].params).toEqual({ name: "Me" });
-    expect((await screen.findByRole("alert")).textContent).toMatch(/couldn't be opened: made by a newer version/);
+describe("Replies after switching person (QA)", () => {
+  it("never applies an import or undo reply to another person's session", async () => {
+    const releases: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn((_u: string, init: RequestInit) => new Promise<Response>((resolve) => {
+      const request = JSON.parse(String(init.body));
+      const result = request.method === "ledger_import" ? imported({ suggested_classes: { INF000E01011: "other" } })
+        : { removed: 1, trades: [], batches: [] };
+      releases.push(() => resolve(new Response(JSON.stringify({ id: request.id, result }))));
+    })));
+    function Switch() {
+      const { update } = useSession();
+      return <button type="button" onClick={() => update({ profileId: 2, trades: [], batches: [], manualBuys: [], excluded: ["KEEP"] })}>switch</button>;
+    }
+    render(<SessionProvider initial={{ ...EMPTY_SESSION, profileId: 1, trades: [TRADE as never], batches: [BATCH] }}>
+      <ImportScreen /><Switch /><Probe /></SessionProvider>);
+    fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [file("tb.csv")] } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    fireEvent.click(screen.getByRole("button", { name: "Undo import of tb.csv" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove 1 trade" })));
+    expect(state().working).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "switch" }));
+    await act(async () => releases.forEach((release) => release()));
+    await waitFor(() => expect(state().working).toBe(false));
+    expect(state()).toMatchObject({ profileId: 2, trades: [], batches: [], fundClasses: {}, excluded: ["KEEP"] });
   });
 });

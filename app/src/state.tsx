@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { rpc } from "./engine";
 
 /** A trade as the engine sends it: amounts are decimal strings. */
@@ -41,6 +41,14 @@ export type Session = {
   batches: ImportBatch[];
   /** Why the ledger couldn't be opened, if it couldn't. */
   ledgerError: string | null;
+  /** Every person kept in this ledger (task 3: one file, several people). */
+  profiles: Profile[];
+  /** True once the profile's saved settings have been loaded; nothing is saved before that. */
+  settingsLoaded: boolean;
+  /** Why the last settings change couldn't be saved, if it couldn't. */
+  saveError: string | null;
+  /** An import or undo is running: switching person waits until it's done. */
+  working: boolean;
   year: number;
   fundClasses: Record<string, FundClass>;
   fmv2018: Record<string, string>;
@@ -59,6 +67,10 @@ export const EMPTY_SESSION: Session = {
   profileId: null,
   batches: [],
   ledgerError: null,
+  profiles: [],
+  settingsLoaded: false,
+  saveError: null,
+  working: false,
   year: 2025,
   fundClasses: {},
   fmv2018: {},
@@ -109,25 +121,165 @@ export function computeParams(session: Session) {
   };
 }
 
-/** localStorage key naming the ledger profile to open (a profile switcher arrives in task 3). */
+/** localStorage key naming the ledger profile to open on launch. */
 export const PROFILE_KEY = "kosh.profile";
 
+export type Profile = { id: number; name: string };
 export type LedgerState = { trades: Trade[]; batches: ImportBatch[] };
 
-/** Opens the saved ledger profile once and loads its trades and import history. */
-export function LedgerLoader() {
-  const { update } = useSession();
-  useEffect(() => {
-    let name = "Me";
+/** Settings as the engine stores them (brief 0001 task 3). */
+type SavedSettings = {
+  fund_classes: Record<string, FundClass>;
+  unconfirmed: string[];
+  fmv_2018: Record<string, string>;
+  names: Record<string, string>;
+  brought_forward: LossEntry[];
+  manual_buys: { trade: Trade; how: Acquired; for_trade: string }[];
+  excluded: string[];
+};
+
+type Opened = LedgerState & { profile: Profile; profiles: Profile[]; settings: SavedSettings };
+
+function toSaved(s: Session): SavedSettings {
+  return {
+    fund_classes: s.fundClasses, unconfirmed: s.unconfirmed, fmv_2018: s.fmv2018, names: s.names,
+    brought_forward: s.broughtForward,
+    manual_buys: s.manualBuys.map((m) => ({ trade: m.trade, how: m.how, for_trade: m.forTrade })),
+    excluded: s.excluded,
+  };
+}
+
+function fromSaved(saved: SavedSettings): Partial<Session> {
+  return {
+    fundClasses: saved.fund_classes, unconfirmed: saved.unconfirmed, fmv2018: saved.fmv_2018, names: saved.names,
+    broughtForward: saved.brought_forward,
+    manualBuys: saved.manual_buys.map((m) => ({ trade: m.trade, how: m.how, forTrade: m.for_trade })),
+    excluded: saved.excluded,
+  };
+}
+
+function storedProfileName(): string {
+  try {
+    return localStorage.getItem(PROFILE_KEY) || "Me";
+  } catch {
+    return "Me"; // storage unavailable: use the default profile
+  }
+}
+
+/** Open the profile called `name` and replace the whole session with its saved data. */
+export async function openProfile(name: string, update: Store["update"]): Promise<void> {
+  update({ settingsLoaded: false });
+  try {
+    const opened = await rpc<Opened>("ledger_profile", { name });
     try {
-      name = localStorage.getItem(PROFILE_KEY) || "Me";
+      localStorage.setItem(PROFILE_KEY, opened.profile.name);
     } catch {
-      // storage unavailable: use the default profile
+      // not remembered for next launch; this session still works
     }
-    rpc<LedgerState & { profile: { id: number; name: string } }>("ledger_profile", { name })
-      .then((r) => update({ profileId: r.profile.id, trades: r.trades, batches: r.batches, ledgerError: null }))
-      .catch((e: Error) => update({ ledgerError: e.message }));
+    update({
+      profileId: opened.profile.id, profiles: opened.profiles, trades: opened.trades, batches: opened.batches,
+      ...fromSaved(opened.settings), ledgerError: null, saveError: null, settingsLoaded: true,
+    });
+  } catch (e) {
+    // The person shown before stays open and editable; only a first launch has nothing loaded.
+    update((current) => ({ ledgerError: (e as Error).message, settingsLoaded: current.profileId !== null }));
+  }
+}
+
+/** Opens the saved profile once on launch, then saves every settings change straight away. */
+export function LedgerLoader() {
+  const { session, update } = useSession();
+  useEffect(() => {
+    void openProfile(storedProfileName(), update);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per launch
   }, []);
+
+  // What the ledger holds for this profile, so loading a profile doesn't save it straight back.
+  const saved = useRef<string | null>(null);
+  // One save at a time, in order: two requests in flight could land in either order. While one
+  // is running, only the newest waiting set per person is kept.
+  const queue = useRef<{ running: boolean; waiting: Map<number, string> }>({ running: false, waiting: new Map() });
+  const flush = () => {
+    const q = queue.current;
+    if (q.running) return;
+    const next = q.waiting.entries().next();
+    if (next.done) return;
+    const [pid, settings] = next.value;
+    q.waiting.delete(pid);
+    q.running = true;
+    rpc("ledger_save_settings", { profile_id: pid, settings: JSON.parse(settings) })
+      .then(() => update((s) => (s.profileId === pid ? { saveError: null } : {})))
+      .catch((e: Error) => update((s) => ({
+        // A failed save for someone no longer shown still needs saying, with whose it was.
+        saveError: s.profileId === pid ? e.message
+          : `${s.profiles.find((p) => p.id === pid)?.name ?? "another person"}: ${e.message}`,
+      })))
+      .finally(() => {
+        q.running = false;
+        flush();
+      });
+  };
+  const { profileId, settingsLoaded } = session;
+  const current = JSON.stringify(toSaved(session));
+  useEffect(() => {
+    if (!settingsLoaded || profileId === null) {
+      saved.current = null;
+      return;
+    }
+    if (saved.current === null) {
+      saved.current = current; // just loaded
+      return;
+    }
+    if (saved.current === current) return;
+    saved.current = current;
+    queue.current.waiting.delete(profileId); // re-insert so the order follows the latest change
+    queue.current.waiting.set(profileId, current);
+    flush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- save when the settings change
+  }, [current, profileId, settingsLoaded]);
   return null;
+}
+
+/** Choose which person's data is shown, or add a person (task 3). */
+export function ProfileSwitcher() {
+  const { session, update } = useSession();
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const taken = session.profiles.some((p) => p.name.toLowerCase() === name.trim().toLowerCase());
+  async function add(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || taken) return;
+    await openProfile(name.trim(), update);
+    setAdding(false);
+    setName("");
+  }
+  if (session.profileId === null) return null;
+  return (
+    <div className="profiles">
+      <label htmlFor="profile">Person</label>
+      <select id="profile" value={session.profileId} disabled={!session.settingsLoaded || session.working}
+        onChange={(e) => {
+          const chosen = session.profiles.find((p) => p.id === Number(e.target.value));
+          if (chosen) void openProfile(chosen.name, update);
+        }}>
+        {session.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      {adding ? (
+        <form onSubmit={add} className="inline-form" aria-label="Add a person">
+          <label htmlFor="new-profile">Name</label>
+          <input id="new-profile" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+          <button type="submit" className="primary" disabled={!name.trim() || taken || session.working}>Add</button>
+          <button type="button" onClick={() => { setAdding(false); setName(""); }}>Cancel</button>
+          {taken && <span className="muted" role="status">There is already a person with this name.</span>}
+        </form>
+      ) : (
+        <button type="button" className="link" disabled={session.working} onClick={() => setAdding(true)}>Add a person</button>
+      )}
+      {!session.settingsLoaded && <span className="muted" role="status">Opening…</span>}
+      {session.ledgerError && session.settingsLoaded && (
+        <div className="error" role="alert">Couldn't switch person: {session.ledgerError}</div>
+      )}
+      {session.saveError && <div className="error" role="alert">Your last change wasn't saved: {session.saveError}</div>}
+    </div>
+  );
 }

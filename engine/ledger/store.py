@@ -19,10 +19,14 @@ from typing import Any, Self
 
 from engine import __version__
 from engine.api import TaxYearReport, compute_tax_years
+from engine.classify.funds import FundClass
+from engine.classify.trades import DELIVERY_SUFFIX
 from engine.ledger.dedupe import dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
+from engine.ledger.settings import ManualBuy, Settings
 from engine.models import Segment, Side, Trade
 from engine.money import ZERO
+from engine.rules.setoff import LossEntry, LossKind
 
 BUSY_TIMEOUT_SECONDS = 5.0
 """How long to wait for another process holding the ledger's write lock."""
@@ -318,6 +322,13 @@ class Ledger:
                 raise LedgerError(f"no import {batch_id} for this profile")
             if row[0] is not None:
                 raise LedgerError(f"import {batch_id} was already undone on {row[0]}")
+            if self._db.execute("SELECT kind FROM import_batch WHERE id = ?",
+                                (batch_id,)).fetchone()[0] == "manual":
+                raise LedgerError("hand-entered purchases are changed in the settings, not undone")
+            # Purchases entered for this import's sales go with them.
+            self._db.execute(
+                "DELETE FROM trade WHERE profile_id = ? AND resolves_source_id IN"
+                " (SELECT source_id FROM trade WHERE batch_id = ?)", (profile_id, batch_id))
             removed = self._db.execute("DELETE FROM trade WHERE batch_id = ?", (batch_id,))
             self._db.execute("UPDATE import_batch SET undone_at = ? WHERE id = ?",
                              (_now(), batch_id))
@@ -344,9 +355,12 @@ class Ledger:
     def _instrument_id(self, trade: Trade) -> int:
         column = "contract_symbol" if trade.segment is Segment.FNO else "isin"
         row = self._db.execute(
-            f"SELECT id FROM instrument WHERE {column} = ?",  # noqa: S608 - fixed column names
+            f"SELECT id, kind FROM instrument WHERE {column} = ?",  # noqa: S608 - fixed columns
             (trade.instrument,)).fetchone()
         if row:
+            if row[1] != _KIND_OF_SEGMENT[trade.segment]:
+                self._db.execute("UPDATE instrument SET kind = ? WHERE id = ?",
+                                 (_KIND_OF_SEGMENT[trade.segment], row[0]))
             return int(row[0])
         cursor = self._db.execute(
             f"INSERT INTO instrument ({column}, kind) VALUES (?, ?)",  # noqa: S608
@@ -378,8 +392,9 @@ class Ledger:
         ordered = sorted(self._select(profile_id), key=_replay_order)
         return [trade for _, trade, _ in ordered]
 
-    def _select(self, profile_id: int) -> list[tuple[int, Trade, str]]:
-        """(row id, trade, dedupe key) for every live trade of the profile."""
+    def _select(self, profile_id: int, *, manual: bool = False) -> list[tuple[int, Trade, str]]:
+        """(row id, trade, dedupe key) for every live imported trade of the profile, or with
+        ``manual`` its hand-entered purchases instead."""
         charges: dict[int, dict[str, Decimal]] = {}
         for trade_row, kind, amount in self._db.execute(
                 "SELECT c.trade_id, c.kind, c.amount FROM trade_charge c"
@@ -390,7 +405,8 @@ class Ledger:
             " t.side, t.quantity, t.price, t.segment, t.executed_at, t.dedupe_key"
             " FROM trade t JOIN instrument i ON i.id = t.instrument_id"
             " JOIN import_batch b ON b.id = t.batch_id"
-            " WHERE t.profile_id = ? AND b.undone_at IS NULL ORDER BY t.id", (profile_id,))
+            " WHERE t.profile_id = ? AND b.undone_at IS NULL AND (b.kind = 'manual') = ?"
+            " ORDER BY t.id", (profile_id, manual))
         return [(row[0], _trade(row[:9], charges.get(row[0], {})), row[9]) for row in rows]
 
 
@@ -400,7 +416,8 @@ class Ledger:
         cursor = self._db.execute(
             "SELECT id, kind, broker, file_name, file_sha256, imported_at, date_from, date_to,"
             " rows_read, trades_added, duplicates_skipped FROM import_batch"
-            " WHERE profile_id = ? AND undone_at IS NULL ORDER BY id", (profile_id,))
+            " WHERE profile_id = ? AND undone_at IS NULL AND kind <> 'manual' ORDER BY id",
+            (profile_id,))
         names = [c[0] for c in cursor.description]
         return [dict(zip(names, row, strict=True)) for row in cursor]
 
@@ -408,9 +425,129 @@ class Ledger:
 
     def compute(self, profile_id: int, start_years: Iterable[int],
                 **inputs: Any) -> list[TaxYearReport]:
-        """Replay every stored trade through ``compute_tax_years`` (D2). ``inputs`` are passed
-        through (fund classes, FMVs, brought-forward losses) until they are stored (task 3)."""
-        return compute_tax_years(start_years, self.trades(profile_id), **inputs)
+        """Replay every stored trade and hand-entered purchase through ``compute_tax_years``
+        (D2) with the profile's saved settings. ``inputs`` override a setting by name."""
+        saved = self.settings(profile_id)
+        stored: dict[str, Any] = {
+            "fund_classes": saved.fund_classes, "fmv_2018": saved.fmv_2018,
+            "brought_forward": saved.brought_forward, "excluded": saved.excluded}
+        trades = self.trades(profile_id) + [m.trade for m in saved.manual_buys]
+        return compute_tax_years(start_years, trades, **{**stored, **inputs})
+
+    # -- settings (task 3) --------------------------------------------------------------------
+
+    def settings(self, profile_id: int) -> Settings:
+        self._require_profile(profile_id)
+        classes: dict[str, FundClass] = {}
+        guessed: set[str] = set()
+        fmv: dict[str, Decimal] = {}
+        names: dict[str, str] = {}
+        for isin, fund_class, was_guessed, price, name in self._db.execute(
+                "SELECT COALESCE(i.isin, i.contract_symbol), s.fund_class, s.fund_class_guessed,"
+                " s.fmv_2018, s.name_for_112a FROM instrument_setting s"
+                " JOIN instrument i ON i.id = s.instrument_id WHERE s.profile_id = ?"
+                " ORDER BY i.id", (profile_id,)):
+            if fund_class:
+                classes[isin] = FundClass(fund_class)
+                if was_guessed:
+                    guessed.add(isin)
+            if price:
+                fmv[isin] = text_decimal(price)
+            if name:
+                names[isin] = name
+        losses = tuple(
+            LossEntry(year, LossKind(kind), text_decimal(amount))
+            for kind, year, amount in self._db.execute(
+                "SELECT kind, year_arose, amount FROM brought_forward_loss WHERE profile_id = ?"
+                " ORDER BY id", (profile_id,)))
+        how = {row[0]: (row[1], row[2]) for row in self._db.execute(
+            "SELECT t.id, t.how_acquired, t.resolves_source_id FROM trade t"
+            " JOIN import_batch b ON b.id = t.batch_id"
+            " WHERE t.profile_id = ? AND b.kind = 'manual'", (profile_id,))}
+        manual = tuple(ManualBuy(trade, *how[row])
+                       for row, trade, _ in self._select(profile_id, manual=True))
+        excluded = tuple(row[0] for row in self._db.execute(
+            "SELECT t.source_id FROM excluded_sale e JOIN trade t ON t.id = e.trade_id"
+            " WHERE t.profile_id = ? ORDER BY e.excluded_at, t.id", (profile_id,)))
+        return Settings(classes, frozenset(guessed), fmv, names, losses, manual, excluded)
+
+    def save_settings(self, profile_id: int, settings: Settings) -> None:
+        """Replace the profile's settings with ``settings``, all or nothing. An exclusion for a
+        sale that isn't saved (its import was undone) is dropped."""
+        self._require_profile(profile_id)
+        with self._transaction():
+            self._db.execute("DELETE FROM instrument_setting WHERE profile_id = ?", (profile_id,))
+            for isin in sorted({*settings.fund_classes, *settings.fmv_2018, *settings.names}):
+                fund_class = settings.fund_classes.get(isin)
+                price = settings.fmv_2018.get(isin)
+                self._db.execute(
+                    "INSERT INTO instrument_setting (profile_id, instrument_id, fund_class,"
+                    " fund_class_guessed, fmv_2018, name_for_112a) VALUES (?, ?, ?, ?, ?, ?)",
+                    (profile_id, self._instrument_for(isin),
+                     fund_class.value if fund_class else None, int(isin in settings.guessed),
+                     decimal_text(price) if price is not None else None,
+                     settings.names.get(isin) or None))
+            self._db.execute("DELETE FROM brought_forward_loss WHERE profile_id = ?",
+                             (profile_id,))
+            self._db.executemany(
+                "INSERT INTO brought_forward_loss (profile_id, kind, year_arose, amount)"
+                " VALUES (?, ?, ?, ?)",
+                [(profile_id, e.kind.value, e.origin_year, decimal_text(e.amount))
+                 for e in settings.brought_forward])
+            self._save_manual(profile_id, settings.manual_buys)
+            # Keep when each sale was first excluded, so the user's order survives a save.
+            first: dict[int, str] = dict(self._db.execute(
+                "SELECT trade_id, excluded_at FROM excluded_sale WHERE trade_id IN"
+                " (SELECT id FROM trade WHERE profile_id = ?)", (profile_id,)).fetchall())
+            self._db.execute(
+                "DELETE FROM excluded_sale WHERE trade_id IN"
+                " (SELECT id FROM trade WHERE profile_id = ?)", (profile_id,))
+            moment = datetime.now(UTC).replace(microsecond=0)
+            for n, sale in enumerate(dict.fromkeys(
+                    s.removesuffix(DELIVERY_SUFFIX) for s in settings.excluded)):
+                row = self._db.execute(
+                    "SELECT t.id FROM trade t JOIN import_batch b ON b.id = t.batch_id"
+                    " WHERE t.profile_id = ? AND t.source_id = ? AND b.undone_at IS NULL"
+                    " AND b.kind <> 'manual'", (profile_id, sale)).fetchone()
+                if row:
+                    at = first.get(row[0]) or (moment + timedelta(microseconds=n)).isoformat()
+                    self._db.execute(
+                        "INSERT INTO excluded_sale (trade_id, reason, excluded_at)"
+                        " VALUES (?, 'missing purchase history', ?)", (row[0], at))
+
+    def _save_manual(self, profile_id: int, buys: Sequence[ManualBuy]) -> None:
+        row = self._db.execute(
+            "SELECT id FROM import_batch WHERE profile_id = ? AND kind = 'manual'"
+            " AND undone_at IS NULL", (profile_id,)).fetchone()
+        if row:
+            batch_id = int(row[0])
+            self._db.execute("DELETE FROM trade WHERE batch_id = ?", (batch_id,))
+        elif buys:
+            batch_id = self._insert_batch(profile_id, Batch(kind="manual"), [], [],
+                                          rows_read=0, duplicates=0, warnings=())
+        else:
+            return
+        for buy in buys:
+            self._insert_trade(profile_id, batch_id, buy.trade, f"MANUAL|{buy.trade.trade_id}")
+            self._db.execute(
+                "UPDATE trade SET how_acquired = ?, resolves_source_id = ?"
+                " WHERE profile_id = ? AND dedupe_key = ?",
+                (buy.how, buy.for_trade.removesuffix(DELIVERY_SUFFIX), profile_id,
+                 f"MANUAL|{buy.trade.trade_id}"))
+        self._db.execute("UPDATE import_batch SET trades_added = ? WHERE id = ?",
+                         (len(buys), batch_id))
+
+    def _instrument_for(self, code: str) -> int:
+        row = self._db.execute(
+            "SELECT id FROM instrument WHERE isin = ? OR contract_symbol = ?",
+            (code, code)).fetchone()
+        if row:
+            return int(row[0])
+        # Provisional until a trade is imported for it (an ETF's ISIN also starts with INF);
+        # `_instrument_id` sets the kind from the trade's segment.
+        kind = "MF" if code.startswith("INF") else "EQUITY"
+        return _rowid(self._db.execute(
+            "INSERT INTO instrument (isin, kind) VALUES (?, ?)", (code, kind)))
 
 
 class _Transaction:

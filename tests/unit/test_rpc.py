@@ -298,3 +298,45 @@ def test_the_same_trades_under_another_mapped_name_are_refused(ledger_dir: Path)
     conflicts = renamed["files"][0]["conflicts"]
     assert [c["reason"] for c in conflicts] == ["other_source", "other_source"]
     assert len(renamed["trades"]) == 2
+
+
+SETTINGS = {
+    "fund_classes": {"INF000D01019": "specified"}, "unconfirmed": ["INF000D01019", "NOT-A-FUND"],
+    "fmv_2018": {A: "812.35"}, "names": {A: "SYNTHETIC ALPHA LTD", "INE000B01012": " "},
+    "brought_forward": [{"origin_year": 2024, "kind": "Short-term capital loss", "amount": "150"}],
+    "manual_buys": [{"how": "gift", "for_trade": "S9", "trade": trade_to_json(
+        buy("2020-01-02", 5, 100, trade_id="MANUAL:1"))}],
+    "excluded": ["S9"],
+}
+
+
+def test_ledger_settings_round_trip_and_profiles(ledger_dir: Path) -> None:
+    me = ok("ledger_profile")
+    assert me["settings"] == {"fund_classes": {}, "unconfirmed": [], "fmv_2018": {}, "names": {},
+                              "brought_forward": [], "manual_buys": [], "excluded": []}
+    person = me["profile"]["id"]
+    ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
+    saved = ok("ledger_save_settings", profile_id=person, settings=SETTINGS)["settings"]
+    assert saved["unconfirmed"] == ["INF000D01019"]
+    assert saved["names"] == {A: "SYNTHETIC ALPHA LTD"}
+    assert saved["excluded"] == []  # S9 isn't a saved sale
+    assert saved["manual_buys"][0]["how"] == "gift"
+    reopened = ok("ledger_profile")
+    assert reopened["settings"] == saved
+    other = ok("ledger_profile", name="Second person")
+    assert other["settings"]["fmv_2018"] == {}
+    assert [p["name"] for p in ok("ledger_profiles")["profiles"]] == ["Me", "Second person"]
+    assert [p["name"] for p in other["profiles"]] == ["Me", "Second person"]
+
+
+@pytest.mark.parametrize(("settings", "message"), [
+    ("x", "settings must be an object"),
+    ({"manual_buys": [{"trade": {}}]}, "trade is missing"),
+    ({"manual_buys": [{"how": "ipo"}]}, "malformed"),
+    ({"fund_classes": {"X": "bond"}}, "bond"),
+    ({"fmv_2018": {A: "0"}}, "positive"),
+])
+def test_ledger_settings_are_checked(ledger_dir: Path, settings: object, message: str) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    error = call("ledger_save_settings", profile_id=person, settings=settings)["error"]
+    assert message in error["message"]

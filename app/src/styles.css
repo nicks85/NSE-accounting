@@ -65,3 +65,7 @@ tr.total td { font-weight: 700; }
 .pill-error { background: var(--error-soft); color: var(--error); border: 1px solid #e3a3a3; }
 .disclaimer { border-top: 1px solid var(--line); border-radius: 6px; max-width: 720px; margin: 40px auto; }
 .disclaimer h1 { color: var(--accent); margin-top: 0; }
+.profiles { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.profiles label { margin: 0; }
+.profiles .inline-form { margin: 0; }
+.profiles select { max-width: 260px; }
