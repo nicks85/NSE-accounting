@@ -375,9 +375,20 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Implemented today:** all non-STT charges on a trade (brokerage, GST, exchange turnover,
   SEBI fee, stamp duty) are added to cost on buys and treated as transfer expenses on sells
   (1961 s.48(i),(ii); 2025 s.72(1)). STT is excluded (1961 s.48 proviso; 2025 s.72(3)(b)).
+- **Source found (brief 0005, 2026-10-10):** the Income Tax Department's capital gains
+  guidance, read through search-result excerpts because incometaxindia.gov.in refused
+  automated access. It needs checking against the page itself.
+  - "it is reasonable to include in the actual cost of a capital asset all the expenses which
+    are incurred by the assessee to acquire it"
+  - "the brokerage or commission, stamp duty, registration fee, traveling expenses, legal
+    expenses, etc., incurred in connection with the transfer are allowed to be deducted"
+- **Shown since brief 0005:** charges are kept by type where the file gives them (Angel One;
+  CAS stamp duty). They are shown in each gain's "why?" and in the PDF's "Charges by type"
+  table. Tax still uses each trade's total.
 - **Open points:**
   1. GST on brokerage and stamp duty on the buyer: part of the cost of acquisition? (Best
-     guess: yes.)
+     guess: yes. Stamp duty and brokerage are named in the guidance above; GST, levied on
+     brokerage and exchange fees, is not.)
   2. DP charges, debited per scrip on sell days and visible only in the ledger statement:
      transfer expenses of that sale? (Best guess: yes, but only if the user applies them from
      the ledger statement; `UNVERIFIED`.)
