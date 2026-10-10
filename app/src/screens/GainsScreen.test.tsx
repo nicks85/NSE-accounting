@@ -166,7 +166,7 @@ describe("GainsScreen missing purchase history", () => {
     const session = JSON.parse(screen.getByTestId("state").textContent!);
     expect(session.manualBuys).toEqual([{ how: "ipo", forTrade: "S1", trade: {
       trade_id: "MANUAL:1", trade_date: "2023-01-02", instrument: "INE000A01011", side: "BUY", quantity: "100",
-      price: "100.50", charges: "0", stt: "0", segment: "EQUITY", executed_at: null } }]);
+      price: "100.50", charges: "0", stt: "0", segment: "EQUITY", executed_at: null, account: null } }]);
     const sent = calls.filter((c) => c.method === "compute").at(-1)!.params.trades as { trade_id: string }[];
     expect(sent.map((t) => t.trade_id)).toEqual(["x", "MANUAL:1"]);
     expect(within(screen.getByLabelText("Missing purchase history")).getByText("IPO allotment")).toBeTruthy();

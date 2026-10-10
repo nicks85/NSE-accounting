@@ -13,6 +13,16 @@ export type Trade = {
   stt: string;
   segment: "EQUITY" | "FNO" | "MF";
   executed_at: string | null;
+  /** The demat account it was made in; null for fund units and unassigned trades (brief 0003). */
+  account?: string | null;
+  /** For a lot moved in from another of the person's accounts: when it arrived. */
+  entered_on?: string | null;
+};
+
+/** Shares moved between two of the person's own demat accounts (brief 0003 C). */
+export type Transfer = {
+  transfer_id: string; on: string; instrument: string; isin: string; quantity: string;
+  from_account: string; to_account: string;
 };
 
 export type FundClass = "equity-oriented" | "specified" | "other";
@@ -39,6 +49,10 @@ export type Session = {
   profileId: number | null;
   /** Live imports, oldest first. */
   batches: ImportBatch[];
+  /** The person's demat accounts, by name (brief 0003). */
+  accounts: string[];
+  /** Moves between the person's own accounts. */
+  transfers: Transfer[];
   /** Why the ledger couldn't be opened, if it couldn't. */
   ledgerError: string | null;
   /** Every person kept in this ledger (task 3: one file, several people). */
@@ -70,6 +84,8 @@ export const EMPTY_SESSION: Session = {
   trades: [],
   profileId: null,
   batches: [],
+  accounts: [],
+  transfers: [],
   ledgerError: null,
   profiles: [],
   settingsLoaded: false,
@@ -124,6 +140,7 @@ export function computeParams(session: Session) {
     fmv_2018: session.fmv2018,
     brought_forward: session.broughtForward,
     excluded: session.excluded,
+    transfers: session.transfers,
     late_returns: Object.entries(session.filedOnTime).filter(([, onTime]) => !onTime).map(([year]) => Number(year)),
     profile_id: session.profileId ?? undefined,
   };
@@ -133,7 +150,12 @@ export function computeParams(session: Session) {
 export const PROFILE_KEY = "kosh.profile";
 
 export type Profile = { id: number; name: string };
-export type LedgerState = { trades: Trade[]; batches: ImportBatch[] };
+export type LedgerState = { trades: Trade[]; batches: ImportBatch[]; accounts?: string[]; transfers?: Transfer[] };
+
+/** The session fields a ledger reply refreshes. */
+export function ledgerFields(state: LedgerState): Pick<Session, "trades" | "batches" | "accounts" | "transfers"> {
+  return { trades: state.trades, batches: state.batches, accounts: state.accounts ?? [], transfers: state.transfers ?? [] };
+}
 
 /** Settings as the engine stores them (brief 0001 task 3). */
 type SavedSettings = {
@@ -188,7 +210,7 @@ export async function openProfile(name: string, update: Store["update"]): Promis
       // not remembered for next launch; this session still works
     }
     update({
-      profileId: opened.profile.id, profiles: opened.profiles, trades: opened.trades, batches: opened.batches,
+      profileId: opened.profile.id, profiles: opened.profiles, ...ledgerFields(opened),
       ...fromSaved(opened.settings), ledgerError: null, saveError: null, settingsLoaded: true,
     });
   } catch (e) {
@@ -293,4 +315,9 @@ export function ProfileSwitcher() {
       {session.saveError && <div className="error" role="alert">Your last change wasn't saved: {session.saveError}</div>}
     </div>
   );
+}
+
+/** What identifies an account name: letters and digits, ignoring case (as the engine does). */
+export function accountKey(name: string): string {
+  return name.toLowerCase().replace(/[^0-9a-z]/g, "");
 }

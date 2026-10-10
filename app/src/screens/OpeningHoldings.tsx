@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { rpc } from "../engine";
-import { useSession, type Acquired, type LedgerState } from "../state";
+import { ledgerFields, useSession, type Acquired, type LedgerState } from "../state";
 import { saveFile } from "./ExportScreen";
 
 const HOW: { value: Acquired; label: string }[] = [
@@ -12,8 +12,11 @@ const HOW: { value: Acquired; label: string }[] = [
   { value: "transfer", label: "Moved from another demat account" },
 ];
 
-type Row = { isin: string; name: string; quantity: string; buy_date: string; price: string; charges: string; how_acquired: Acquired };
-const EMPTY: Row = { isin: "", name: "", quantity: "", buy_date: "", price: "", charges: "", how_acquired: "bought" };
+type Row = {
+  isin: string; name: string; quantity: string; buy_date: string; price: string; charges: string; how_acquired: Acquired;
+  account: string; entered_on: string;
+};
+const EMPTY: Row = { isin: "", name: "", quantity: "", buy_date: "", price: "", charges: "", how_acquired: "bought", account: "", entered_on: "" };
 
 /** Download Kosh's CSV template for opening holdings. */
 export function TemplateButton() {
@@ -37,12 +40,13 @@ export function TemplateButton() {
 /** Enter shares held before the first imported tradebook, one row per lot (brief 0001 task 7). */
 export function OpeningForm() {
   const { session, update } = useSession();
-  const [rows, setRows] = useState<Row[]>([{ ...EMPTY }]);
+  const fresh = (): Row => ({ ...EMPTY, account: session.accounts.length === 1 ? session.accounts[0] : "" });
+  const [rows, setRows] = useState<Row[]>([fresh()]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const set = (i: number, change: Partial<Row>) => setRows((all) => all.map((r, j) => (j === i ? { ...r, ...change } : r)));
-  const filled = rows.filter((r) => Object.entries(r).some(([k, v]) => k !== "how_acquired" && v.trim()));
+  const filled = rows.filter((r) => Object.entries(r).some(([k, v]) => k !== "how_acquired" && k !== "account" && v.trim()));
   const incomplete = filled.some((r) => !r.isin.trim() || !r.quantity.trim() || !r.buy_date || !r.price.trim());
 
   async function save(event: FormEvent) {
@@ -58,7 +62,7 @@ export function OpeningForm() {
         "ledger_add_opening", { profile_id: profileId, rows: filled.map((r) => ({ ...r, quantity: r.quantity.replace(/,/g, ""),
           price: r.price.replace(/,/g, ""), charges: r.charges.replace(/,/g, "") })) });
       update((s) => (s.profileId !== profileId ? {}
-        : { trades: result.trades, batches: result.batches, names: { ...result.names, ...s.names } }));
+        : { ...ledgerFields(result), names: { ...result.names, ...s.names } }));
       if (result.conflicts.length > 0) {
         setError(`${result.conflicts.length} lot(s) are already saved with other charges or another way of acquiring them, ` +
           "so nothing was saved. To correct a lot, undo the earlier entry in the import history below, then enter it again.");
@@ -68,7 +72,7 @@ export function OpeningForm() {
         (result.duplicates ? `; ${result.duplicates} already saved and skipped. A lot with the same date, quantity and price ` +
           "counts as the same lot: enter identical lots in one go, or as one lot with the total quantity." : ".") +
         (result.warnings.length ? ` Note: ${result.warnings.join("; ")}.` : ""));
-      setRows([{ ...EMPTY }]);
+      setRows([fresh()]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -82,11 +86,12 @@ export function OpeningForm() {
       <fieldset>
         <legend>Or enter them here</legend>
         <p className="muted">
-          One row per lot, with the date and price you (or, for a gift, the previous owner) bought at.
+          One row per lot, with the date and price you (or, for a gift, the previous owner) bought at, and the demat
+          account it is in. For shares moved from another of your accounts, give the date they arrived: FIFO queues them by it.
           <span className="pill pill-warn" title="Best guess; to be verified">UNVERIFIED Q-029</span>
         </p>
         <table className="entry">
-          <thead><tr><th>ISIN</th><th>Name (optional)</th><th>Quantity</th><th>Bought on</th><th>Price (₹)</th><th>Charges (₹)</th><th>How acquired</th><th></th></tr></thead>
+          <thead><tr><th>ISIN</th><th>Name (optional)</th><th>Quantity</th><th>Bought on</th><th>Price (₹)</th><th>Charges (₹)</th><th>How acquired</th><th>Demat account</th><th></th></tr></thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={i}>
@@ -100,13 +105,20 @@ export function OpeningForm() {
                   <select aria-label={`How acquired, lot ${i + 1}`} value={r.how_acquired} onChange={(e) => set(i, { how_acquired: e.target.value as Acquired })}>
                     {HOW.map((h) => <option key={h.value} value={h.value}>{h.label}</option>)}
                   </select>
+                  {r.how_acquired === "transfer" && (
+                    <label className="muted">Arrived in this account on
+                      <input aria-label={`Arrived on, lot ${i + 1}`} type="date" value={r.entered_on} onChange={(e) => set(i, { entered_on: e.target.value })} />
+                    </label>
+                  )}
                 </td>
+                <td><input aria-label={`Demat account, lot ${i + 1}`} list="known-accounts-opening" value={r.account} placeholder="e.g. Zerodha" onChange={(e) => set(i, { account: e.target.value })} /></td>
                 <td>{rows.length > 1 && <button type="button" className="link" aria-label={`Remove lot ${i + 1}`} onClick={() => setRows((all) => all.filter((_, j) => j !== i))}>Remove</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button type="button" onClick={() => setRows((all) => [...all, { ...EMPTY }])}>Add another lot</button>{" "}
+        <datalist id="known-accounts-opening">{session.accounts.map((a) => <option key={a} value={a} />)}</datalist>
+        <button type="button" onClick={() => setRows((all) => [...all, fresh()])}>Add another lot</button>{" "}
         <button type="submit" className="primary" disabled={busy || session.working || filled.length === 0 || incomplete || session.profileId === null}>
           {busy ? "Saving…" : "Save holdings"}
         </button>
