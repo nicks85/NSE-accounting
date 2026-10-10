@@ -6,6 +6,18 @@ import { HoldingsScreen } from "./HoldingsScreen";
 import { ImportScreen } from "./ImportScreen";
 import { MissingHistory } from "./MissingHistory";
 
+/** Brief 0004: an import is a preview, then "Save" when the preview offers it. */
+async function importNow() {
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Preview import" })));
+  // Reading a chosen file is asynchronous: wait for the preview (or an error) to appear.
+  await waitFor(() => expect(screen.queryByText("Check before saving") ?? screen.queryByRole("alert")).toBeTruthy());
+  await waitFor(() => expect(screen.queryByText("Reading…")).toBeNull());
+  const panel = screen.queryByLabelText("Import preview");
+  const save = (panel && within(panel).queryByRole("button", { name: /^Save / })) as HTMLButtonElement | null;
+  if (save && !save.disabled) await act(async () => fireEvent.click(save));
+}
+
+
 type Call = { method: string; params: Record<string, unknown> };
 const ISIN = "INE000A01012";
 const trade = (id: string, account: string | null, side: "BUY" | "SELL" = "BUY") => ({
@@ -126,7 +138,8 @@ describe("Holdings by account", () => {
 
 describe("Account on import and in missing history", () => {
   it("defaults the account to the broker and sends a typed one", async () => {
-    const calls = engine({ ledger_import: { result: { files: [], source: null, format_confirmed: true, warnings: [], suggested_classes: {},
+    const calls = engine({ ledger_import: { result: { files: [{ name: "z.csv", sha256: "ab", added: 1, duplicates: 0, already_imported_on: null,
+      conflicts: [], possible_duplicates: 0 }], source: null, format_confirmed: true, warnings: [], suggested_classes: {},
       scheme_names: {}, trades: [], batches: [], accounts: ["Zerodha", "Zerodha joint"], transfers: [] } } });
     render(<SessionProvider initial={{ ...EMPTY_SESSION, profileId: 1, settingsLoaded: true, accounts: ["Zerodha"] }}><ImportScreen /><Probe /></SessionProvider>);
     const account = screen.getByLabelText("Demat account these trades are in") as HTMLInputElement;
@@ -138,7 +151,7 @@ describe("Account on import and in missing history", () => {
     fireEvent.click(screen.getByLabelText("Zerodha tradebook"));
     fireEvent.change(screen.getByLabelText("Demat account these trades are in"), { target: { value: "Zerodha joint" } });
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [new File(["a"], "z.csv")] } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    await importNow();
     expect(calls[0].params).toMatchObject({ broker: "zerodha", account: "Zerodha joint" });
     expect(state().accounts).toEqual(["Zerodha", "Zerodha joint"]);
   });
@@ -205,7 +218,7 @@ describe("Accounts after review (QA)", () => {
     fireEvent.click(screen.getByRole("button", { name: "switch" }));
     expect((screen.getByLabelText("Demat account these trades are in") as HTMLInputElement).value).toBe("Zerodha");
     fireEvent.change(screen.getByLabelText(/Choose tradebook/), { target: { files: [new File(["a"], "z.csv")] } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    await importNow();
     expect(screen.getByText(/already imported on .* into Zerodha/)).toBeTruthy();
     expect(screen.getByText(/undo that import below and import it again/)).toBeTruthy();
   });

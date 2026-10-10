@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic Zerodha tradebook (fake ISIN). Bought 1,000 @500 in 2015, sold @1,500 in Jun 2025.
 const HEADER = "symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time";
@@ -10,7 +10,7 @@ test("settings are saved per person and survive closing Kosh", async ({ page }) 
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 2 new trades/)).toBeVisible();
 
   // With the 31-Jan-2018 price 800: LTCG 7,00,000 - 1,25,000 = 5,75,000 x 12.5% = 71,875 → 71,880.

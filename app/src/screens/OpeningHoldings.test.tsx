@@ -1,7 +1,19 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_SESSION, SessionProvider, useSession } from "../state";
 import { ImportScreen } from "./ImportScreen";
+
+/** Brief 0004: an import is a preview, then "Save" when the preview offers it. */
+async function importNow() {
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Preview import" })));
+  // Reading a chosen file is asynchronous: wait for the preview (or an error) to appear.
+  await waitFor(() => expect(screen.queryByText("Check before saving") ?? screen.queryByRole("alert")).toBeTruthy());
+  await waitFor(() => expect(screen.queryByText("Reading…")).toBeNull());
+  const panel = screen.queryByLabelText("Import preview");
+  const save = (panel && within(panel).queryByRole("button", { name: /^Save / })) as HTMLButtonElement | null;
+  if (save && !save.disabled) await act(async () => fireEvent.click(save));
+}
+
 
 type Call = { method: string; params: Record<string, unknown> };
 const LOT = { trade_id: "OPENING:INE000A01012:2016-04-01:1", trade_date: "2016-04-01", instrument: "INE000A01012",
@@ -92,7 +104,7 @@ describe("Opening holdings", () => {
     const input = screen.getByLabelText("Choose the filled-in template") as HTMLInputElement;
     expect(input.multiple).toBe(false);
     fireEvent.change(input, { target: { files: [new File(["isin"], "o.csv")] } });
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import files" })));
+    await importNow();
     await waitFor(() => expect(calls.at(-1)!.params).toMatchObject({ broker: "opening", profile_id: 1 }));
     expect(screen.getByText(/Imported 1 new trade from Opening holdings/)).toBeTruthy();
   });

@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic tradebooks (fake ISIN) in two demat accounts. Zerodha: 100 bought @100 on
 // 2-Jan-23. Groww: 50 bought @300 on 3-Jun-24, 120 sold @400 on 2-Jun-25. 100 were moved
@@ -15,11 +15,11 @@ test("FIFO per demat account, and a transfer between accounts", async ({ page })
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Demat account these trades are in")).toHaveValue("Zerodha");
   await page.getByLabel(/Choose tradebook/).setInputFiles(ZERODHA);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 1 new trade/)).toBeVisible();
   await page.getByLabel("Demat account these trades are in").fill("Groww");
   await page.getByLabel(/Choose tradebook/).setInputFiles(GROWW);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 2 new trades/)).toBeVisible();
 
   // Groww's sale can't use Zerodha's shares: 70 of the 120 have no purchase in Groww.

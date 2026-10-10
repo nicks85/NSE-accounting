@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic Zerodha tradebooks (fake ISIN).
 const HEADER = "symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time";
@@ -15,7 +15,7 @@ test("a filed year warns when a later import changes its figures", async ({ page
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(THIS_YEAR);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 2 new trades/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Export" }).click();
@@ -24,7 +24,7 @@ test("a filed year warns when a later import changes its figures", async ({ page
 
   await page.getByRole("tab", { name: "Import" }).click();
   await page.getByLabel(/Choose tradebook/).setInputFiles(OLDER);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 1 new trade/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Gains" }).click();
@@ -43,7 +43,7 @@ test("a loss from a return filed late is not set off", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(THIS_YEAR);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 2 new trades/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Losses" }).click();
