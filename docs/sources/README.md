@@ -30,6 +30,10 @@ the app never reads these at runtime.
 | Bonus stripping | s.175(9),(10) | s.94(8) |
 | STCG on STT-paid equity at 20% | s.196 | s.111A |
 | LTCG on STT-paid equity at 12.5% above ₹1,25,000 | s.198 | s.112A |
+| Basic-exemption shortfall against special-rate gains: residents only | s.196(2), s.197(2), s.198(3) | s.111A(1) proviso, s.112(1) proviso, s.112A(2) |
+| Rebate: resident individuals only; not against equity LTCG tax | s.156, s.198(7) | s.87A |
+| "Non-resident" includes an RNOR only for ss.161, 174, 312; RNOR defined | s.2(72), s.6(13) | s.6(6) |
+| TDS on sums paid to a non-resident ("any other sum chargeable") | s.393(2) Table Sl. No. 17 | s.195 |
 
 1961 Act equivalents are from the drafting mapping and well-known section numbers. Only
 111A/112A rates, the 23-Jul-2024 cutover and the ₹1.25 lakh limit are confirmed against an

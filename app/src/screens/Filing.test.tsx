@@ -178,3 +178,11 @@ describe("Marking a stale report (QA)", () => {
     await waitFor(() => expect((screen.getByRole("button", { name: "Mark FY 2025-26 as filed" }) as HTMLButtonElement).disabled).toBe(false));
   });
 });
+
+describe("Residential status on Export", () => {
+  it("names the status to select in the return", async () => {
+    engine(REPORT);
+    await renderWith(<ExportScreen />, { residency: { 2025: "NRI" } });
+    expect((await screen.findByText(/choose the residential status/)).textContent).toMatch(/Non-resident/);
+  });
+});

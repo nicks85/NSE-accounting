@@ -23,6 +23,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from engine import __version__
 from engine.api import ChargesByType, TaxYearReport
 from engine.classify.funds import isin_of
+from engine.residency import RESIDENCY_LABEL
 from engine.rules import PACKS
 from engine.rules.base import Act
 
@@ -113,6 +114,8 @@ def render_summary(report: TaxYearReport, *, names: Mapping[str, str] | None = N
     story: list[object] = [
         _p(f"Kosh — tax summary for {report.pack.label}", styles["Title"]),
         _p(f"Governing law: {act.value}. Engine {__version__}.", body),
+        _p(f"Residential status for this year: {RESIDENCY_LABEL[report.residency]} "
+           "(select the same in the return, Part A).", body),
         _p(DISCLAIMER, small),
         Spacer(1, 4 * mm),
         _p("Summary", styles["Heading2"]),

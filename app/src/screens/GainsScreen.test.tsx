@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReportProvider } from "../report";
 import { EMPTY_SESSION, SessionProvider, useSession, type Session } from "../state";
@@ -257,5 +257,33 @@ describe("Charges in why? after a split (QA round 2)", () => {
     const charges = within(gains).getByRole("list", { name: "Charges" });
     expect(charges.textContent).toMatch(/After a split, this purchase is 20 shares; 8 of them are in this line\./);
     expect(charges.textContent).not.toMatch(/8 of those 10/);
+  });
+});
+
+describe("Residential status (brief 0006)", () => {
+  it("is chosen per year and sent with the computation", async () => {
+    const calls = mockEngine(report());
+    await renderWith({});
+    const status = await screen.findByLabelText("Residential status for this year") as HTMLSelectElement;
+    expect(status.value).toBe("RES");
+    expect(calls.filter((c) => c.method === "compute").at(-1)!.params.residency).toBe("RES");
+    await act(async () => fireEvent.change(status, { target: { value: "NRI" } }));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).residency).toEqual({ 2025: "NRI" });
+    await waitFor(() => expect(calls.filter((c) => c.method === "compute").at(-1)!.params.residency).toBe("NRI"));
+    await act(async () => fireEvent.change(screen.getByLabelText("Tax year"), { target: { value: "2024" } }));
+    expect((screen.getByLabelText("Residential status for this year") as HTMLSelectElement).value).toBe("RES");
+    await act(async () => fireEvent.change(screen.getByLabelText("Tax year"), { target: { value: "2025" } }));
+    await act(async () => fireEvent.change(screen.getByLabelText("Residential status for this year"), { target: { value: "RES" } }));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).residency).toEqual({});
+  });
+});
+
+describe("Residential status after review (QA)", () => {
+  it("is described for screen readers and waits for the person's settings", async () => {
+    mockEngine(report());
+    await renderWith({ profileId: 3, settingsLoaded: false });
+    const status = await screen.findByLabelText("Residential status for this year");
+    expect(status.getAttribute("aria-describedby")).toBe("residency-hint");
+    expect((status as HTMLSelectElement).disabled).toBe(true);
   });
 });

@@ -151,6 +151,7 @@ def _compute_inputs(params: JSON) -> tuple[int, dict[str, Any]]:
         "brought_forward": _losses(params.get("brought_forward", [])),
         "excluded": [str(t) for t in params.get("excluded", [])],
         "late_returns": [int(y) for y in params.get("late_returns", [])],
+        "residency": str(params.get("residency") or "RES"),
         "transfers": _transfers(params.get("transfers", [])),
     }
 
@@ -263,6 +264,7 @@ def report_to_json(report: TaxYearReport) -> JSON:
         "setoff_steps": [{"loss": st.loss, "against": st.against, "amount": _s(st.amount),
                           "citation": citation_to_json(st.citation, report)}
                          for st in report.setoff.steps],
+        "residency": report.residency,
         "carried_forward": [_loss(e) for e in report.carried_forward],
         "lapsed": [_loss(e) for e in report.lapsed],
         "not_carried": [_loss(e) for e in report.not_carried],
@@ -450,6 +452,7 @@ def _settings_to_json(settings: Any) -> JSON:
                         for m in settings.manual_buys],
         "excluded": list(settings.excluded),
         "filed_on_time": {str(y): v for y, v in settings.filed_on_time.items()},
+        "residency": {str(y): v for y, v in settings.residency.items()},
     }
 
 
@@ -472,6 +475,8 @@ def _settings_from_json(data: Any) -> Any:
                               for m in data.get("manual_buys", [])),
             excluded=tuple(str(e) for e in data.get("excluded", [])),
             filed_on_time={_year(y): bool(v) for y, v in data.get("filed_on_time", {}).items()},
+            residency={_year(y): str(v) for y, v in data.get("residency", {}).items()
+                       if str(v) != "RES"},
         )
     except (KeyError, TypeError, AttributeError) as error:
         raise RequestError(f"settings are malformed: {error}") from None

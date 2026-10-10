@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { inTauri, rpc } from "../engine";
-import { FiledChanges, filedOn, useReport } from "../report";
+import { FiledChanges, filedOn, RESIDENCY_LABEL, useReport } from "../report";
 import { computeParams, useSession } from "../state";
 
 type ItrResult = {
@@ -188,6 +188,8 @@ export function ExportScreen() {
           (FY 2025-26) and checks them against the official CBDT schema. The rest of the return
           (personal details, other income, loss schedules, tax) is completed in the official utility.
         </p>
+        <p>In the return (Part A), choose the residential status{" "}
+          <strong>{RESIDENCY_LABEL[session.residency[String(session.year)] ?? "RES"]}</strong>.</p>
         <ShareNames />
         <label htmlFor="form">Form</label>
         <select id="form" value={form} onChange={(e) => setForm(e.target.value)}>

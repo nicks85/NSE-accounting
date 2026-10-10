@@ -44,6 +44,8 @@ export type ImportBatch = {
   trades_added: number; duplicates_skipped: number | null;
 };
 
+export type Residency = "RES" | "NOR" | "NRI";
+
 export type Session = {
   /** Every trade saved in the ledger for this profile, as the engine replays them. */
   trades: Trade[];
@@ -78,6 +80,8 @@ export type Session = {
   excluded: string[];
   /** Start year → whether that year's return was filed by the due date (Q-011); absent = not sure. */
   filedOnTime: Record<string, boolean>;
+  /** Start year → residential status (brief 0006); absent = resident. */
+  residency: Record<string, Residency>;
   /** Bumped when something outside the inputs changes the report (marking a year filed). */
   revision: number;
 };
@@ -102,6 +106,7 @@ export const EMPTY_SESSION: Session = {
   manualBuys: [],
   excluded: [],
   filedOnTime: {},
+  residency: {},
   revision: 0,
 };
 
@@ -143,6 +148,7 @@ export function computeParams(session: Session) {
     brought_forward: session.broughtForward,
     excluded: session.excluded,
     transfers: session.transfers,
+    residency: session.residency[String(session.year)] ?? "RES",
     late_returns: Object.entries(session.filedOnTime).filter(([, onTime]) => !onTime).map(([year]) => Number(year)),
     profile_id: session.profileId ?? undefined,
   };
@@ -169,6 +175,7 @@ type SavedSettings = {
   manual_buys: { trade: Trade; how: Acquired; for_trade: string }[];
   excluded: string[];
   filed_on_time: Record<string, boolean>;
+  residency?: Record<string, Residency>;
 };
 
 type Opened = LedgerState & { profile: Profile; profiles: Profile[]; settings: SavedSettings };
@@ -180,6 +187,7 @@ function toSaved(s: Session): SavedSettings {
     manual_buys: s.manualBuys.map((m) => ({ trade: m.trade, how: m.how, for_trade: m.forTrade })),
     excluded: s.excluded,
     filed_on_time: s.filedOnTime,
+    residency: s.residency,
   };
 }
 
@@ -190,6 +198,7 @@ function fromSaved(saved: SavedSettings): Partial<Session> {
     manualBuys: saved.manual_buys.map((m) => ({ trade: m.trade, how: m.how, forTrade: m.for_trade })),
     excluded: saved.excluded,
     filedOnTime: saved.filed_on_time ?? {},
+    residency: saved.residency ?? {},
   };
 }
 

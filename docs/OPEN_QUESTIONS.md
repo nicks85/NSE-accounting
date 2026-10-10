@@ -400,22 +400,29 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 
 ## Q-028 — What residency status changes
 
-- **Area:** new per-year setting; decision brief 0001 (D10).
-- **Believed (to verify against both Acts):**
-  1. The basic-exemption shortfall may reduce special-rate capital gains only for a
-     **resident** individual or HUF (1961: s.111A(1) proviso, s.112(1) proviso, s.112A(2) —
-     to verify; 2025 Act sections — not yet found).
-  2. The rebate under s.87A (1961) is for resident individuals only; 2025 Act section not
-     yet found.
-  3. Rates of 20% (STCG on STT-paid equity) and 12.5% (LTCG), and the ₹1.25 lakh exemption,
-     apply equally to non-residents (to verify).
-  4. Tax is deducted at source on payments of capital gains to non-residents (1961 s.195;
-     2025 Act section not yet found).
-  5. Residents but not ordinarily resident are treated like residents for Indian listed
-     securities (to verify).
-- **Proposed:** status per tax year as a user input (default Resident). For non-residents, the
-  effects above appear as warnings; the figures are not changed until verified.
-- **Status:** open.
+- **Area:** a per-year setting (brief 0006, approved 2026-10-10).
+- **Cited from the 2025 Act text in `docs/sources/` (checked 2026-10-10):**
+  1. **The shortfall is for residents only.** The basic-exemption shortfall reduces
+     special-rate gains only for "an individual or a Hindu undivided family, being a
+     resident" (s.196(2), s.197(2), s.198(3)). 1961 Act: s.111A(1) proviso, s.112(1) proviso,
+     s.112A(2), still to check against an official text (Q-001).
+  2. **So is the rebate.** It is for "an individual resident in India" (s.156; 1961 s.87A),
+     and it isn't allowed against the s.198 tax (s.198(7)).
+  3. **The rates and exemption have no residency condition:** 20% (s.196(1)), and 12.5% above
+     ₹1,25,000 (s.198(2)). They apply equally to non-residents.
+- **Implemented:** notices only. Kosh applies neither the shortfall nor the rebate, so the
+  figure is right for a non-resident and can only overstate a resident's tax.
+  4. **TDS on a non-resident's gains:** s.393(2), Table Sl. No. 17. This covers "any other sum
+     chargeable" paid to "any non-resident (not being a company)", at rates in force (1961
+     s.195).
+  5. **RNOR is a resident for the shortfall.** "Non-resident" includes a person not ordinarily
+     resident (s.6(13)) only for ss.161, 174 and 312 (s.2(72)). 1961 Act: s.6(6).
+- **Still open:**
+  - The 1961 Act sections, against an official text (Q-001).
+  - Whether 1961 s.112A(6) is the counterpart of s.198(7), which disallows the rebate against
+    equity LTCG.
+  - Whether 1961 s.2(30) is the counterpart of 2025 s.2(72) for RNOR ("non-resident" defined).
+- **Status:** verified against the 2025 Act; the 1961 sections are still to be checked.
 
 ## Q-029 — Cost and acquisition date for holdings not bought on the exchange
 

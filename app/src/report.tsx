@@ -54,6 +54,8 @@ export type Report = {
   lapsed?: Loss[];
   /** This year's losses that don't carry forward because this year's return was filed late. */
   not_carried?: Loss[];
+  /** Residential status the year was computed with (brief 0006). */
+  residency?: "RES" | "NOR" | "NRI";
   /** Present when the report was computed for a ledger profile: the year's filing, if any. */
   filing?: Filing | null;
 };
@@ -80,7 +82,7 @@ const ReportContext = createContext<ReportState>({ status: "idle" });
 export function ReportProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
   const [state, setState] = useState<ReportState>({ status: "idle" });
-  const { trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, revision, profileId } = session;
+  const { trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, residency, revision, profileId } = session;
   useEffect(() => {
     let current = true;
     if (trades.length === 0 && manualBuys.length === 0 && broughtForward.length === 0) {
@@ -100,7 +102,7 @@ export function ReportProvider({ children }: { children: ReactNode }) {
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when inputs change
-  }, [trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, revision, profileId]);
+  }, [trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded, filedOnTime, residency, revision, profileId]);
   return <ReportContext.Provider value={state}>{children}</ReportContext.Provider>;
 }
 
@@ -180,3 +182,7 @@ export function FiledChanges({ filing }: { filing: Filing | null | undefined }) 
     </section>
   );
 }
+
+export const RESIDENCY_LABEL: Record<string, string> = {
+  RES: "Resident", NOR: "Resident but not ordinarily resident", NRI: "Non-resident",
+};
