@@ -70,10 +70,17 @@ class TaxYearReport:
     While any remain the year is incomplete: earlier ones change which lots later sales use."""
     excluded_sales: tuple[Shortfall, ...] = ()
     """Shortfalls in this year the user chose to leave out; totals are labelled (Q-031)."""
+    lapsed: tuple[LossEntry, ...] = ()
+    """Brought-forward losses not set off because their year's return was filed late."""
+    not_carried: tuple[LossEntry, ...] = ()
+    """This year's own unabsorbed losses, which don't carry forward because this year's
+    return was filed late (2025 Act s.121; 1961 Act s.80)."""
 
     @property
     def carried_forward(self) -> tuple[LossEntry, ...]:
-        return self.setoff.carried_forward
+        """Losses that carry into the next year: the set-off's unabsorbed losses, less this
+        year's own losses when its return was filed late (``not_carried``)."""
+        return tuple(e for e in self.setoff.carried_forward if e not in self.not_carried)
 
     @property
     def excluded_value(self) -> Decimal:
@@ -100,6 +107,7 @@ def compute_tax_year(
     fund_classes: Mapping[str, FundClass] | None = None,
     brought_forward: Iterable[LossEntry] = (),
     excluded: Iterable[str] = (),
+    late_returns: Iterable[int] = (),
 ) -> TaxYearReport:
     """Compute one tax year (``start_year`` 2024 → FY 2024-25).
 
@@ -111,8 +119,17 @@ def compute_tax_year(
     ``trades`` may span several years; history is needed for FIFO. Only disposals closed in
     the requested year are taxed. ``fmv_2018`` maps ISIN → 31-Jan-2018 FMV per share or unit
     (NAV for fund units). ``fund_classes`` maps a fund's ISIN → its ``FundClass``.
+
+    ``late_returns`` are the start years whose return the user says was filed after the due
+    date. A loss carries forward only if determined in a return filed on time (2025 Act
+    s.121; 1961 Act s.80 with s.139(3)), so brought-forward losses from those years are not
+    set off, and this year's losses are flagged as not carrying forward if this year is one.
     """
     pack = pack_for_year(start_year)
+    late = set(late_returns)
+    offered = list(brought_forward)
+    lapsed = tuple(e for e in offered if e.origin_year in late)
+    brought_forward = [e for e in offered if e.origin_year not in late]
     _, year_end = tax_year_bounds(start_year)
     history = [t for t in trades if t.trade_date <= year_end]
     action_list = [a for a in actions if a.ex_date <= year_end]
@@ -167,7 +184,7 @@ def compute_tax_year(
         used += [c for c in pack.citations.values() if c.question == "Q-007"]
     if result.order_assumed:
         used.append(common.SETOFF_ORDER)
-    if result.carried_forward:
+    if result.carried_forward or lapsed:
         used.append(common.RETURN_OF_LOSS)
     unverified = tuple(dict.fromkeys(c for c in used if c.unverified))
     warnings += [
@@ -180,6 +197,22 @@ def compute_tax_year(
                "carry-forward period and was not used")
         for e in result.expired
     ]
+    warnings += [
+        Notice("LOSS_LAPSED", f"{e.kind.value} of {_fy(e.origin_year)} (₹{e.amount}) is not "
+               "set off: that year's return is marked as filed late, and a loss carries forward "
+               "only if it was determined in a return filed by the due date (2025 Act s.121; "
+               "1961 Act s.80). If the delay was condoned, mark that return as filed on time.",
+               question="Q-011")
+        for e in lapsed
+    ]
+    own_losses = tuple(e for e in result.carried_forward if e.origin_year == start_year)
+    not_carried = own_losses if start_year in late else ()
+    if not_carried:
+        total = sum((e.amount for e in own_losses), ZERO)
+        warnings.append(Notice(
+            "NOT_CARRIED", f"This year's return is marked as filed late, so this year's losses "
+            f"(₹{total}) can't be carried forward to later years (2025 Act s.121; 1961 Act "
+            "s.80).", question="Q-011"))
     excluded_ids = set(excluded)
 
     def is_excluded(gap: Shortfall) -> bool:  # a same-day split sell keeps its own id
@@ -224,7 +257,13 @@ def compute_tax_year(
         unverified=unverified,
         missing_history=missing,
         excluded_sales=left_out,
+        lapsed=lapsed,
+        not_carried=not_carried,
     )
+
+
+def _fy(start_year: int) -> str:
+    return f"FY {start_year}-{(start_year + 1) % 100:02d}"
 
 
 def compute_tax_years(
@@ -238,13 +277,14 @@ def compute_tax_years(
     fund_classes_by_year: Mapping[int, Mapping[str, FundClass]] | None = None,
     brought_forward: Iterable[LossEntry] = (),
     excluded: Iterable[str] = (),
+    late_returns: Iterable[int] = (),
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next.
 
     A fund's class can change between years (the meaning of "specified fund" changed in
     FY 2025-26): ``fund_classes_by_year[year]`` overrides ``fund_classes`` for that year."""
     trade_list, lot_list, action_list = list(trades), list(opening_lots), list(actions)
-    excluded_list = list(excluded)
+    excluded_list, late = list(excluded), list(late_returns)
     years = sorted(start_years)
     if years and years != list(range(years[0], years[-1] + 1)):
         raise ValueError(f"tax years must be consecutive to carry losses forward: {years}")
@@ -255,7 +295,8 @@ def compute_tax_years(
                                   fmv_2018=fmv_2018,
                                   fund_classes={**(fund_classes or {}),
                                                 **(fund_classes_by_year or {}).get(year, {})},
-                                  brought_forward=carried, excluded=excluded_list)
+                                  brought_forward=carried, excluded=excluded_list,
+                                  late_returns=late)
         reports.append(report)
         carried = list(report.carried_forward)
     return reports

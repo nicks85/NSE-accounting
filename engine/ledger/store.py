@@ -7,9 +7,10 @@ editable state: they are rebuilt by replaying every trade through the same FIFO 
 Uses only the standard library ``sqlite3``; nothing here opens a network connection.
 """
 
+import hashlib
 import json
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -76,6 +77,17 @@ class Batch:
     broker: str | None = None
     file_name: str | None = None
     file_sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FiledYear:
+    """A year marked as filed, with its figures exactly as they were then."""
+
+    start_year: int
+    filed_at: str
+    itr_form: str | None
+    engine_version: str
+    report: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,7 +442,8 @@ class Ledger:
         saved = self.settings(profile_id)
         stored: dict[str, Any] = {
             "fund_classes": saved.fund_classes, "fmv_2018": saved.fmv_2018,
-            "brought_forward": saved.brought_forward, "excluded": saved.excluded}
+            "brought_forward": saved.brought_forward, "excluded": saved.excluded,
+            "late_returns": saved.late_returns}
         trades = self.trades(profile_id) + [m.trade for m in saved.manual_buys]
         return compute_tax_years(start_years, trades, **{**stored, **inputs})
 
@@ -469,7 +482,11 @@ class Ledger:
         excluded = tuple(row[0] for row in self._db.execute(
             "SELECT t.source_id FROM excluded_sale e JOIN trade t ON t.id = e.trade_id"
             " WHERE t.profile_id = ? ORDER BY e.excluded_at, t.id", (profile_id,)))
-        return Settings(classes, frozenset(guessed), fmv, names, losses, manual, excluded)
+        on_time = {int(year): bool(value) for year, value in self._db.execute(
+            "SELECT start_year, return_filed_on_time FROM year_setting WHERE profile_id = ?"
+            " AND return_filed_on_time IS NOT NULL ORDER BY start_year", (profile_id,))}
+        return Settings(classes, frozenset(guessed), fmv, names, losses, manual, excluded,
+                        on_time)
 
     def save_settings(self, profile_id: int, settings: Settings) -> None:
         """Replace the profile's settings with ``settings``, all or nothing. An exclusion for a
@@ -495,6 +512,15 @@ class Ledger:
                 [(profile_id, e.kind.value, e.origin_year, decimal_text(e.amount))
                  for e in settings.brought_forward])
             self._save_manual(profile_id, settings.manual_buys)
+            # Year rows also hold the filed date, so they're updated, never deleted here.
+            self._db.execute("UPDATE year_setting SET return_filed_on_time = NULL"
+                             " WHERE profile_id = ?", (profile_id,))
+            for year, on_time in settings.filed_on_time.items():
+                self._db.execute(
+                    "INSERT INTO year_setting (profile_id, start_year, return_filed_on_time)"
+                    " VALUES (?, ?, ?) ON CONFLICT (profile_id, start_year)"
+                    " DO UPDATE SET return_filed_on_time = excluded.return_filed_on_time",
+                    (profile_id, year, int(on_time)))
             # Keep when each sale was first excluded, so the user's order survives a save.
             first: dict[int, str] = dict(self._db.execute(
                 "SELECT trade_id, excluded_at FROM excluded_sale WHERE trade_id IN"
@@ -514,6 +540,57 @@ class Ledger:
                     self._db.execute(
                         "INSERT INTO excluded_sale (trade_id, reason, excluded_at)"
                         " VALUES (?, 'missing purchase history', ?)", (row[0], at))
+
+    # -- filed years (task 4) ------------------------------------------------------------------
+
+    def mark_filed(self, profile_id: int, start_year: int, report: Mapping[str, Any],
+                   itr_form: str | None = None) -> str:
+        """Keep ``report`` (RPC report JSON) as the year's "as filed" figures; returns when."""
+        self._require_profile(profile_id)
+        if not report.get("complete", True):
+            raise LedgerError("a year with sales missing purchase history can't be marked filed")
+        when = _now()
+        text = json.dumps(report, sort_keys=True, ensure_ascii=False)
+        with self._transaction():
+            self._db.execute(
+                "INSERT INTO year_setting (profile_id, start_year, itr_form, filed_at)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT (profile_id, start_year) DO UPDATE SET"
+                " itr_form = excluded.itr_form, filed_at = excluded.filed_at",
+                (profile_id, start_year, itr_form, when))
+            self._db.execute(
+                "INSERT OR REPLACE INTO year_snapshot (profile_id, start_year,"
+                " inputs_fingerprint, engine_version, computed_at, report_json, open_lots_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                # The column holds a hash of the filed report itself: changes are found by
+                # comparing figures (filing.changes), not by hashing inputs.
+                (profile_id, start_year, hashlib.sha256(text.encode()).hexdigest(),
+                 __version__, when, text,
+                 json.dumps(report.get("open_lots", []), sort_keys=True, ensure_ascii=False)))
+        return when
+
+    def unmark_filed(self, profile_id: int, start_year: int) -> None:
+        """Forget that the year was filed, and its "as filed" figures."""
+        self._require_profile(profile_id)
+        with self._transaction():
+            self._db.execute("UPDATE year_setting SET filed_at = NULL, itr_form = NULL"
+                             " WHERE profile_id = ? AND start_year = ?", (profile_id, start_year))
+            self._db.execute("DELETE FROM year_snapshot WHERE profile_id = ? AND start_year = ?",
+                             (profile_id, start_year))
+
+    def filed(self, profile_id: int, start_year: int) -> FiledYear | None:
+        row = self._db.execute(
+            "SELECT y.filed_at, y.itr_form, s.engine_version, s.report_json FROM year_setting y"
+            " JOIN year_snapshot s ON s.profile_id = y.profile_id AND s.start_year = y.start_year"
+            " WHERE y.profile_id = ? AND y.start_year = ? AND y.filed_at IS NOT NULL",
+            (profile_id, start_year)).fetchone()
+        if row is None:
+            return None
+        return FiledYear(start_year, row[0], row[1], row[2], json.loads(row[3]))
+
+    def filed_years(self, profile_id: int) -> list[int]:
+        return [int(r[0]) for r in self._db.execute(
+            "SELECT start_year FROM year_setting WHERE profile_id = ? AND filed_at IS NOT NULL"
+            " ORDER BY start_year", (profile_id,))]
 
     def _save_manual(self, profile_id: int, buys: Sequence[ManualBuy]) -> None:
         row = self._db.execute(

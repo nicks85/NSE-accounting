@@ -51,6 +51,13 @@ class Settings:
     manual_buys: tuple[ManualBuy, ...] = ()
     excluded: tuple[str, ...] = ()
     """Engine trade ids of sales left out for missing purchase history (Q-031)."""
+    filed_on_time: Mapping[int, bool] = field(default_factory=lambda: MappingProxyType({}))
+    """Start year → whether that year's return was filed by the due date (Q-011). A year
+    that isn't listed is unknown."""
+
+    @property
+    def late_returns(self) -> tuple[int, ...]:
+        return tuple(sorted(y for y, on_time in self.filed_on_time.items() if not on_time))
 
     def __post_init__(self) -> None:
         for isin, price in self.fmv_2018.items():

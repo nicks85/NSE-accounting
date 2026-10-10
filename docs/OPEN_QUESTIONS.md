@@ -128,9 +128,15 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 
 - **Rule:** no loss carries forward unless determined in a return filed under s.263(1) —
   2025 Act s.121 (verified in `docs/sources/`); 1961 Act s.80 (due date, s.139(3)).
-- **Implemented as:** carried-forward losses are listed with a warning; the engine can't know
-  whether returns were filed on time.
-- **Status:** open (data, not law: needs a user input per year).
+- **Implemented as:** the user answers, per tax year, whether that year's return was filed by
+  the due date (Losses screen, saved in the ledger; brief 0001 task 4).
+  - **Filed late:** losses from that year are not set off in later years, with a notice. The
+    year's own losses are flagged as not carrying forward.
+  - **Not answered:** carried-forward losses are listed with the UNVERIFIED warning, as
+    before.
+- **Not handled:** condonation of delay (2025 Act / 1961 Act s.119(2)(b)). A user whose
+  delay was condoned is told to mark that return as filed on time.
+- **Status:** partly handled; the rule itself still needs CA confirmation (UNVERIFIED).
 
 ## Q-012 — Scope of the tax figure
 
