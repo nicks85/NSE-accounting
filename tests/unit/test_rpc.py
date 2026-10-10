@@ -411,3 +411,30 @@ def test_ledger_restore_size_cap(ledger_dir: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(rpc, "MAX_IMPORT_BYTES", 10)
     assert "larger than" in call("ledger_restore", data_base64=b64("x" * 11))["error"]["message"]
+
+
+def test_opening_holdings_from_the_form_and_the_template(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    template = ok("opening_template")
+    assert template["name"] == "kosh-opening-holdings.csv" and "how_acquired" in template["csv"]
+    row = {"isin": "INE000A01012", "name": "SYNTHETIC ALPHA", "quantity": "10",
+           "buy_date": "2016-04-01", "price": "100", "how_acquired": "ipo"}
+    added = ok("ledger_add_opening", profile_id=person, rows=[row])
+    assert (added["added"], added["names"]) == (1, {"INE000A01012": "SYNTHETIC ALPHA"})
+    assert added["batches"][0]["kind"] == "opening"
+    again = ok("ledger_add_opening", profile_id=person, rows=[row])
+    assert (again["added"], again["duplicates"], again["conflicts"]) == (0, 1, [])
+    gift = ok("ledger_add_opening", profile_id=person, rows=[{**row, "how_acquired": "gift"}])
+    assert gift["added"] == 0 and gift["conflicts"][0]["reason"] == "same_id"
+    assert gift["names"] == {}
+    upload = ok("ledger_import", profile_id=person, broker="opening", files=[
+        {"name": "o.csv", "data_base64": b64(
+            "isin,quantity,buy_date,price\nINE000A01012,5,2017-01-02,90\n")}])
+    assert upload["files"][0]["added"] == 1 and upload["batches"][-1]["kind"] == "opening"
+    assert len(upload["trades"]) == 2
+    assert "rows must be a list" in call("ledger_add_opening", profile_id=person,
+                                         rows="x")["error"]["message"]
+    assert "one opening-holdings file" in call(
+        "import", broker="opening",
+        files=[{"name": "a", "data_base64": b64("x")}, {"name": "b", "data_base64": b64("y")}]
+    )["error"]["message"]

@@ -1,15 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { fileToBase64, rpc } from "../engine";
 import { Backup } from "./Backup";
+import { OpeningForm, TemplateButton } from "./OpeningHoldings";
 import { useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
 
-type Broker = "zerodha" | "upstox" | "angelone" | "mapped" | "cas";
+type Broker = "zerodha" | "upstox" | "angelone" | "mapped" | "cas" | "opening";
 
 const SOURCES: { id: Broker; label: string; hint: string; accept: string }[] = [
   { id: "zerodha", label: "Zerodha tradebook", hint: "Console → Reports → Tradebook (CSV or XLSX). Several yearly files are fine.", accept: ".csv,.xlsx" },
   { id: "upstox", label: "Upstox tradebook", hint: "Trade report (CSV or XLSX).", accept: ".csv,.xlsx" },
   { id: "angelone", label: "Angel One trade history", hint: "Angel One → Account → Trades & Charges → download trade history (XLSX). Several files are fine.", accept: ".xlsx,.csv" },
   { id: "mapped", label: "Groww or other (map columns)", hint: "Tell Kosh which column holds each field. Groww XLSX files are protected with your PAN.", accept: ".csv,.xlsx" },
+  { id: "opening", label: "Holdings from before your first tradebook", hint: "Shares you held before the earliest tradebook you have, entered once with their purchase date and price. Download the template and fill one row per lot, or enter them below. For mutual-fund units held with the fund house, import your CAS instead.", accept: ".csv" },
   { id: "cas", label: "Mutual fund CAS (PDF)", hint: "Detailed CAS from CAMS or KFintech, covering your whole history.", accept: ".pdf" },
 ];
 
@@ -47,7 +49,7 @@ type ImportResult = LedgerState & {
 };
 
 const BROKER_LABEL: Record<string, string> = {
-  zerodha: "Zerodha", upstox: "Upstox", angelone: "Angel One", cas: "CAS",
+  zerodha: "Zerodha", upstox: "Upstox", angelone: "Angel One", cas: "CAS", opening: "Opening holdings",
 };
 
 function when(iso: string): string {
@@ -196,6 +198,7 @@ export function ImportScreen() {
   // changes or a backup is restored.
   useEffect(() => setLast(null), [session.profileId, session.revision]);
   const source = SOURCES.find((s) => s.id === broker)!;
+  const single = broker === "cas" || broker === "opening";
   const missingColumns = broker === "mapped"
     ? MAPPED_FIELDS.filter((f) => f.required && !mapping[f.field]?.trim()).map((f) => f.label)
     : [];
@@ -265,11 +268,14 @@ export function ImportScreen() {
         </fieldset>
 
         <fieldset>
-          <legend>2. File{broker === "cas" ? "" : "s"}</legend>
-          <label htmlFor="files">Choose {broker === "cas" ? "the CAS PDF" : "tradebook file(s)"}</label>
-          <input key={inputKey} id="files" type="file" accept={source.accept} multiple={broker !== "cas"} onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
-          <label htmlFor="password">Password {broker === "cas" ? "(required for CAS)" : "(only for protected XLSX)"}</label>
-          <input id="password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <legend>2. File{single ? "" : "s"}</legend>
+          {broker === "opening" && <p><TemplateButton /></p>}
+          <label htmlFor="files">Choose {broker === "cas" ? "the CAS PDF" : broker === "opening" ? "the filled-in template" : "tradebook file(s)"}</label>
+          <input key={inputKey} id="files" type="file" accept={source.accept} multiple={!single} onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+          {broker !== "opening" && <>
+            <label htmlFor="password">Password {broker === "cas" ? "(required for CAS)" : "(only for protected XLSX)"}</label>
+            <input id="password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </>}
         </fieldset>
 
         {broker === "mapped" && (
@@ -299,6 +305,9 @@ export function ImportScreen() {
           {busy ? "Importing…" : "Import files"}
         </button>
       </form>
+
+      {/* keyed by person: rows typed for one person are never saved for another */}
+      {broker === "opening" && <OpeningForm key={session.profileId ?? "none"} />}
 
       {session.ledgerError && (
         <div className="error" role="alert">Your saved data couldn't be opened: {session.ledgerError}</div>

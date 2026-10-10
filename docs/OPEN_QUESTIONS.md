@@ -409,6 +409,15 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
     (see Q-026).
 - **Proposed:** the form asks "how acquired" and applies the matching rule, marked
   `UNVERIFIED` until each item is cited.
+- **Also assumed by opening holdings (brief 0001 task 7, to verify):**
+  - A gifted or inherited lot uses the previous owner's purchase date. That date also
+    decides its place in FIFO order among the user's own purchases of the same share.
+  - For ESOP shares, the form doesn't settle between the exercise date and the allotment
+    date; the user enters the one they believe applies.
+  - Fractional share quantities are accepted, with a warning. They can arise from corporate
+    actions.
+  - A lot with the same ISIN, date, quantity and price as one already saved is treated as the
+    same lot.
 - **Status:** open.
 
 ## Q-030 — Angel One "TradesAndCharges" layout

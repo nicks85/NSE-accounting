@@ -22,7 +22,7 @@ from typing import Any, Self
 from engine import __version__
 from engine.api import TaxYearReport, compute_tax_years
 from engine.classify.funds import FundClass
-from engine.classify.trades import DELIVERY_SUFFIX
+from engine.classify.trades import DELIVERY_SUFFIX, OPENING_PREFIX
 from engine.ledger.dedupe import dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
 from engine.ledger.settings import ManualBuy, Settings
@@ -336,7 +336,8 @@ class Ledger:
         return str(row[0]) if row else None
 
     def import_trades(self, profile_id: int, batch: Batch, trades: Sequence[Trade], *,
-                      warnings: Sequence[str] = ()) -> ImportOutcome:
+                      warnings: Sequence[str] = (),
+                      how_acquired: Mapping[str, str] | None = None) -> ImportOutcome:
         """Import one file (D3): skip trades already in the ledger, refuse the whole file if a
         trade's key is there with different details, and recognise a file already imported.
         Nothing is stored unless at least one trade is new."""
@@ -371,7 +372,8 @@ class Ledger:
                         possible.append(Conflict(trade, lookalike, "other_source"))
                     in_file[key] = trade
                     fresh.append((trade, key))
-                elif same_details(trade, earlier):
+                elif same_details(trade, earlier) and not self._corrected(
+                        profile_id, trade, earlier, key, how_acquired):
                     duplicates += 1
                 else:
                     conflicts.append(Conflict(trade, earlier))
@@ -382,8 +384,27 @@ class Ledger:
             batch_id = self._insert_batch(
                 profile_id, batch, [t for t, _ in fresh], [k for _, k in fresh],
                 rows_read=len(trades), duplicates=duplicates, warnings=warnings, read=trades)
+            for trade, key in fresh:
+                if how_acquired and trade.trade_id in how_acquired:
+                    self._db.execute(
+                        "UPDATE trade SET how_acquired = ? WHERE profile_id = ? AND dedupe_key = ?",
+                        (how_acquired[trade.trade_id], profile_id, key))
         return ImportOutcome(batch_id, len(fresh), duplicates,
                              possible_duplicates=tuple(possible))
+
+    def _corrected(self, profile_id: int, new: Trade, saved: Trade, key: str,
+                   how_acquired: Mapping[str, str] | None) -> bool:
+        """An opening lot entered again with other charges or another way of acquiring is a
+        correction, not a duplicate: it's refused as a conflict, never silently dropped."""
+        if not new.trade_id.startswith(OPENING_PREFIX):
+            return False
+        if new.charges != saved.charges:
+            return True
+        row = self._db.execute("SELECT how_acquired FROM trade WHERE profile_id = ? AND"
+                               " dedupe_key = ?", (profile_id, key)).fetchone()
+        stored_how = row[0] if row else None
+        new_how = (how_acquired or {}).get(new.trade_id)
+        return stored_how is not None and new_how is not None and stored_how != new_how
 
     def undo_batch(self, profile_id: int, batch_id: int) -> int:
         """Remove a batch's trades and mark it undone (kept in the history); returns how many

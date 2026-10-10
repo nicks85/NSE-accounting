@@ -107,3 +107,11 @@ def test_h8_manual_buy_never_turns_another_sale_intraday() -> None:
     r = compute_tax_year(2024, trades)
     assert r.business.lines == ()
     assert [line.disposal.quantity for line in r.capital_gains] == [d(5)]
+
+
+def test_h7_opening_lot_and_hand_entered_purchase_for_one_share_are_flagged() -> None:
+    manual = buy("2023-01-02", 100, 100, trade_id=f"{MANUAL_PREFIX}1")
+    opening = buy("2016-04-01", 100, 50, trade_id="OPENING:INE000A01011:2016-04-01:100:50:1")
+    r = compute_tax_year(2025, [SALE, manual, opening])
+    [note] = [n for n in r.warnings if n.code == "OPENING_AND_MANUAL"]
+    assert A in note.message and "counts them twice" in note.message

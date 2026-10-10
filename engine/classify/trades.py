@@ -29,6 +29,9 @@ from engine.money import ZERO
 UNVERIFIED_INTRADAY_NETTING = True  # surfaced as a warning whenever intraday is found
 INTRADAY_SUFFIX = "#intraday"
 DELIVERY_SUFFIX = "#delivery"
+OPENING_PREFIX = "OPENING:"
+"""Trade-id prefix for opening holdings: lots held before the first imported tradebook, entered
+by the user (brief 0001 D5). Like hand-entered purchases they are always delivery."""
 MANUAL_PREFIX = "MANUAL:"
 """Trade-id prefix for purchases the user entered by hand (missing purchase history). Such a
 buy stands for shares already held before any imported trade, so it is always delivery and is
@@ -57,7 +60,7 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
             fno.append(trade)
         elif trade.segment is Segment.MUTUAL_FUND:
             delivery.append(trade)  # bought from / redeemed with the fund: never intraday
-        elif trade.trade_id.startswith(MANUAL_PREFIX):
+        elif trade.trade_id.startswith((MANUAL_PREFIX, OPENING_PREFIX)):
             delivery.append(trade)
         else:
             groups.setdefault((trade.instrument, trade.trade_date), []).append(trade)
