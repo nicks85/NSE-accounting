@@ -7,11 +7,13 @@ nothing here can talk to the network (CLAUDE.md rule 1).
 Request:  {"id": 1, "method": "compute", "params": {...}}
 Response: {"id": 1, "result": {...}}  or  {"id": 1, "error": {"type": "...", "message": "..."}}
 
-Amounts travel as decimal strings (never floats) and dates as ISO text. The bridge is
-stateless: the UI keeps the imported trades and sends them with each request.
+Amounts travel as decimal strings (never floats) and dates as ISO text. Imported trades are
+kept in the local ledger file (``ledger_*`` methods, brief 0001); the calculation methods
+are stateless and take the trades with each request.
 """
 
 import base64
+import hashlib
 import json
 import sys
 from collections.abc import Callable, Mapping
@@ -251,10 +253,12 @@ def _files(params: JSON) -> list[tuple[str, bytes]]:
     return decoded
 
 
-def m_import(params: JSON) -> JSON:
+def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str, str],
+                                                                  dict[str, str]]:
+    """Run the importer chosen by ``params["broker"]`` over ``files``: (result, suggested fund
+    classes, names)."""
     broker = params.get("broker")
     password = params.get("password") or None
-    files = _files(params)
     suggested: dict[str, str] = {}
     names: dict[str, str] = {}
     if broker == "cas":
@@ -294,6 +298,11 @@ def m_import(params: JSON) -> JSON:
         result = load_tradebooks(files, profile, password=password)
     else:
         raise RequestError(f"unknown broker {broker!r}")
+    return result, suggested, names
+
+
+def m_import(params: JSON) -> JSON:
+    result, suggested, names = _parse(params, _files(params))
     return {
         "source": result.source,
         "format_confirmed": result.format_confirmed,
@@ -302,6 +311,104 @@ def m_import(params: JSON) -> JSON:
         "suggested_classes": suggested,
         "scheme_names": names,
     }
+
+
+# --- ledger ---------------------------------------------------------------------------------
+
+_LEDGER: Any = None
+"""The open ledger (``engine.ledger.Ledger``), opened on first use and kept for the life of the
+process so its write lock is taken only once."""
+
+
+def _ledger() -> Any:
+    global _LEDGER
+    if _LEDGER is None:
+        from engine.ledger import Ledger, ledger_path
+
+        _LEDGER = Ledger.open(ledger_path())
+    return _LEDGER
+
+
+def _profile_id(params: JSON) -> int:
+    value = params.get("profile_id")
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RequestError("profile_id must be a number")
+    return value
+
+
+def _ledger_state(profile_id: int) -> JSON:
+    ledger = _ledger()
+    return {"trades": [trade_to_json(t) for t in ledger.trades(profile_id)],
+            "batches": ledger.batches(profile_id)}
+
+
+def m_ledger_profile(params: JSON) -> JSON:
+    """Open (or create) the profile named ``name`` (default "Me") and return its state."""
+    name = str(params.get("name") or "Me")
+    profile = _ledger().ensure_profile(name)
+    return {"profile": {"id": profile.id, "name": profile.display_name},
+            **_ledger_state(profile.id)}
+
+
+def m_ledger_state(params: JSON) -> JSON:
+    return _ledger_state(_profile_id(params))
+
+
+def m_ledger_import(params: JSON) -> JSON:
+    """Import each file into the ledger as its own batch (so each can be undone). A file
+    already imported is recognised by its SHA-256 before it is read."""
+    from engine.ledger import Batch
+
+    profile_id = _profile_id(params)
+    ledger = _ledger()
+    kind = "cas" if params.get("broker") == "cas" else "tradebook"
+    broker = str(params.get("key") or params.get("broker") or "")
+    files: list[JSON] = []
+    suggested: dict[str, str] = {}
+    names: dict[str, str] = {}
+    warnings: list[str] = []
+    sources: list[str] = []
+    confirmed = True
+    # Read every file before saving any, so a bad second file doesn't leave the first saved.
+    parsed: list[tuple[str, str, str | None, Any]] = []
+    for name, data in _files(params):
+        sha = hashlib.sha256(data).hexdigest()
+        when = ledger.imported_on(profile_id, sha)
+        parsed.append((name, sha, when, None if when else _parse(params, [(name, data)])))
+    for name, sha, when, parsed_file in parsed:
+        if when:
+            files.append({"name": name, "added": 0, "duplicates": 0,
+                          "already_imported_on": when, "conflicts": [],
+                          "possible_duplicates": 0})
+            continue
+        result, file_suggested, file_names = parsed_file
+        outcome = ledger.import_trades(
+            profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings)
+        files.append({
+            "name": name, "added": outcome.added, "duplicates": outcome.duplicates,
+            "already_imported_on": outcome.already_imported_on,
+            "conflicts": [{"new": trade_to_json(c.new), "existing": trade_to_json(c.existing),
+                           "reason": c.reason} for c in outcome.conflicts],
+            "possible_duplicates": len(outcome.possible_duplicates)})
+        if not outcome.conflicts:
+            suggested.update(file_suggested)
+            names.update(file_names)
+            warnings.extend(result.warnings)
+        sources.append(result.source)
+        confirmed = confirmed and result.format_confirmed
+    return {"files": files, "source": sources[0] if sources else None,
+            "format_confirmed": confirmed, "warnings": warnings,
+            "suggested_classes": suggested, "scheme_names": names,
+            **_ledger_state(profile_id)}
+
+
+def m_ledger_undo(params: JSON) -> JSON:
+    batch_id = params.get("batch_id")
+    if not isinstance(batch_id, int) or isinstance(batch_id, bool):
+        raise RequestError("batch_id must be a number")
+    profile_id = _profile_id(params)
+    removed = _ledger().undo_batch(profile_id, batch_id)
+    return {"removed": removed, **_ledger_state(profile_id)}
 
 
 def m_compute(params: JSON) -> JSON:
@@ -343,6 +450,10 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "unclassified_funds": m_unclassified,
     "export_itr": m_export_itr,
     "export_pdf": m_export_pdf,
+    "ledger_profile": m_ledger_profile,
+    "ledger_state": m_ledger_state,
+    "ledger_import": m_ledger_import,
+    "ledger_undo": m_ledger_undo,
 }
 
 

@@ -7,6 +7,7 @@ editable state: they are rebuilt by replaying every trade through the same FIFO 
 Uses only the standard library ``sqlite3``; nothing here opens a network connection.
 """
 
+import json
 import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Any, Self
 
 from engine import __version__
 from engine.api import TaxYearReport, compute_tax_years
+from engine.ledger.dedupe import dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
 from engine.models import Segment, Side, Trade
 from engine.money import ZERO
@@ -72,9 +74,35 @@ class Batch:
     file_sha256: str | None = None
 
 
-def default_dedupe_key(trade: Trade) -> str:
-    """Segment plus the engine's trade id. Brief D3 refines this per broker (task 2)."""
-    return f"{trade.segment.value}|{trade.trade_id}"
+@dataclass(frozen=True, slots=True)
+class Conflict:
+    """Why a file was refused rather than overwriting or doubling a saved trade.
+
+    ``reason`` is ``"same_id"`` when the trade's key is already saved with different details
+    (D3), or ``"other_source"`` when a saved trade from another source has the same execution
+    time and details: almost certainly the same trade imported under another broker name
+    (e.g. a mapped file named "Groww" once and "Groww India" later)."""
+
+    new: Trade
+    existing: Trade
+    reason: str = "same_id"
+
+
+@dataclass(frozen=True, slots=True)
+class ImportOutcome:
+    batch_id: int | None
+    """The new batch, or None when nothing was stored."""
+    added: int
+    duplicates: int
+    """Trades already in the ledger with the same details, skipped."""
+    already_imported_on: str | None = None
+    """Set when this exact file is already in the ledger; nothing was read from it."""
+    conflicts: tuple[Conflict, ...] = ()
+    """Non-empty means the whole file was refused."""
+    possible_duplicates: tuple[Conflict, ...] = ()
+    """Saved anyway, but each matches a saved trade from another source on date, share, side,
+    quantity and price. Without execution times Kosh can't tell a re-import under another
+    broker name from a genuine second trade, so it warns instead of refusing."""
 
 
 class Ledger:
@@ -171,6 +199,22 @@ class Ledger:
                 "INSERT INTO profile (display_name, created_at) VALUES (?, ?)", (name, created))
         return Profile(_rowid(cursor), name, created)
 
+    def ensure_profile(self, display_name: str) -> Profile:
+        """The profile with this name, created if there is none yet."""
+        name = display_name.strip()
+        if not name:
+            raise LedgerError("a profile needs a name")
+        with self._transaction():
+            row = self._db.execute(
+                "SELECT id, display_name, created_at FROM profile WHERE display_name = ?"
+                " ORDER BY id LIMIT 1", (name,)).fetchone()
+            if row:
+                return Profile(*row)
+            created = _now()
+            cursor = self._db.execute(
+                "INSERT INTO profile (display_name, created_at) VALUES (?, ?)", (name, created))
+        return Profile(_rowid(cursor), name, created)
+
     def profiles(self) -> list[Profile]:
         rows = self._db.execute("SELECT id, display_name, created_at FROM profile ORDER BY id")
         return [Profile(*row) for row in rows]
@@ -182,31 +226,21 @@ class Ledger:
     # -- trades -------------------------------------------------------------------------------
 
     def add_batch(self, profile_id: int, batch: Batch, trades: Sequence[Trade],
-                  dedupe_keys: Sequence[str] | None = None) -> int:
+                  keys: Sequence[str] | None = None) -> int:
         """Store ``trades`` as one import batch, all or nothing; returns the batch id.
 
-        A trade whose dedupe key is already in this profile's ledger, or a file whose SHA-256
-        was imported before, is refused with ``LedgerError`` (task 2 adds skip-and-report)."""
+        Strict: a trade whose key is already in this profile's ledger, or a file whose SHA-256
+        is in a live batch, raises ``LedgerError``. ``import_trades`` skips and reports."""
         if batch.kind not in BATCH_KINDS:
             raise LedgerError(f"unknown batch kind {batch.kind!r}")
-        keys = list(dedupe_keys) if dedupe_keys is not None else [
-            default_dedupe_key(t) for t in trades]
+        keys = list(keys) if keys is not None else dedupe_keys(trades)
         if len(keys) != len(trades):
             raise LedgerError("one dedupe key is needed per trade")
         self._require_profile(profile_id)
-        dates = [t.trade_date for t in trades]
         try:
             with self._transaction():
-                cursor = self._db.execute(
-                    "INSERT INTO import_batch (profile_id, kind, broker, file_name, file_sha256,"
-                    " imported_at, date_from, date_to, rows_read, trades_added,"
-                    " duplicates_skipped) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-                    (profile_id, batch.kind, batch.broker, batch.file_name, batch.file_sha256,
-                     _now(), min(dates).isoformat() if dates else None,
-                     max(dates).isoformat() if dates else None, len(trades), len(trades)))
-                batch_id = _rowid(cursor)
-                for trade, key in zip(trades, keys, strict=True):
-                    self._insert_trade(profile_id, batch_id, trade, key)
+                batch_id = self._insert_batch(profile_id, batch, trades, keys,
+                                              rows_read=len(trades), duplicates=0, warnings=())
         except sqlite3.IntegrityError as error:
             if "import_batch" in str(error):
                 raise LedgerError("this file is already in the ledger") from None
@@ -214,6 +248,97 @@ class Ledger:
                 raise LedgerError("a trade in this file is already in the ledger") from None
             raise LedgerError(  # pragma: no cover - inputs are validated Trades
                 f"the ledger refused the import: {error}") from None
+        return batch_id
+
+    def imported_on(self, profile_id: int, file_sha256: str) -> str | None:
+        """When this exact file was imported, if it is in a live batch."""
+        row = self._db.execute(
+            "SELECT imported_at FROM import_batch WHERE profile_id = ? AND file_sha256 = ?"
+            " AND undone_at IS NULL", (profile_id, file_sha256)).fetchone()
+        return str(row[0]) if row else None
+
+    def import_trades(self, profile_id: int, batch: Batch, trades: Sequence[Trade], *,
+                      warnings: Sequence[str] = ()) -> ImportOutcome:
+        """Import one file (D3): skip trades already in the ledger, refuse the whole file if a
+        trade's key is there with different details, and recognise a file already imported.
+        Nothing is stored unless at least one trade is new."""
+        if batch.kind not in BATCH_KINDS:
+            raise LedgerError(f"unknown batch kind {batch.kind!r}")
+        self._require_profile(profile_id)
+        keys = dedupe_keys(trades)
+        with self._transaction():
+            when = self.imported_on(profile_id, batch.file_sha256) if batch.file_sha256 else None
+            if when:
+                return ImportOutcome(None, 0, 0, already_imported_on=when)
+            saved = self._select(profile_id)
+            wanted = set(keys)
+            stored = {key: trade for _, trade, key in saved if key in wanted}
+            timed = {_timed_details(t): t for _, t, _ in saved if t.executed_at is not None}
+            untimed = {details(t): t for _, t, _ in saved}
+            possible: list[Conflict] = []
+            fresh: list[tuple[Trade, str]] = []
+            in_file: dict[str, Trade] = {}
+            conflicts: list[Conflict] = []
+            duplicates = 0
+            for trade, key in zip(trades, keys, strict=True):
+                earlier = stored.get(key) or in_file.get(key)
+                if earlier is None:
+                    twin = timed.get(_timed_details(trade)) if trade.executed_at else None
+                    if twin is not None and _source(twin) != _source(trade):
+                        conflicts.append(Conflict(trade, twin, "other_source"))
+                        continue
+                    lookalike = untimed.get(details(trade))
+                    if (trade.executed_at is None and lookalike is not None
+                            and _source(lookalike) != _source(trade)):
+                        possible.append(Conflict(trade, lookalike, "other_source"))
+                    in_file[key] = trade
+                    fresh.append((trade, key))
+                elif same_details(trade, earlier):
+                    duplicates += 1
+                else:
+                    conflicts.append(Conflict(trade, earlier))
+            if conflicts:
+                return ImportOutcome(None, 0, duplicates, conflicts=tuple(conflicts))
+            if not fresh:
+                return ImportOutcome(None, 0, duplicates)
+            batch_id = self._insert_batch(
+                profile_id, batch, [t for t, _ in fresh], [k for _, k in fresh],
+                rows_read=len(trades), duplicates=duplicates, warnings=warnings, read=trades)
+        return ImportOutcome(batch_id, len(fresh), duplicates,
+                             possible_duplicates=tuple(possible))
+
+    def undo_batch(self, profile_id: int, batch_id: int) -> int:
+        """Remove a batch's trades and mark it undone (kept in the history); returns how many
+        trades were removed. The same file can then be imported again."""
+        with self._transaction():
+            row = self._db.execute(
+                "SELECT undone_at FROM import_batch WHERE id = ? AND profile_id = ?",
+                (batch_id, profile_id)).fetchone()
+            if row is None:
+                raise LedgerError(f"no import {batch_id} for this profile")
+            if row[0] is not None:
+                raise LedgerError(f"import {batch_id} was already undone on {row[0]}")
+            removed = self._db.execute("DELETE FROM trade WHERE batch_id = ?", (batch_id,))
+            self._db.execute("UPDATE import_batch SET undone_at = ? WHERE id = ?",
+                             (_now(), batch_id))
+        return removed.rowcount
+
+    def _insert_batch(self, profile_id: int, batch: Batch, trades: Sequence[Trade],
+                      keys: Sequence[str], *, rows_read: int, duplicates: int,
+                      warnings: Sequence[str], read: Sequence[Trade] = ()) -> int:
+        """``read`` is every trade in the file (duplicates included), for its date range."""
+        dates = [t.trade_date for t in (read or trades)]
+        cursor = self._db.execute(
+            "INSERT INTO import_batch (profile_id, kind, broker, file_name, file_sha256,"
+            " imported_at, date_from, date_to, rows_read, trades_added, duplicates_skipped,"
+            " warnings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (profile_id, batch.kind, batch.broker, batch.file_name, batch.file_sha256, _now(),
+             min(dates).isoformat() if dates else None,
+             max(dates).isoformat() if dates else None, rows_read, len(trades), duplicates,
+             json.dumps(list(warnings)) if warnings else None))
+        batch_id = _rowid(cursor)
+        for trade, key in zip(trades, keys, strict=True):
+            self._insert_trade(profile_id, batch_id, trade, key)
         return batch_id
 
     def _instrument_id(self, trade: Trade) -> int:
@@ -250,6 +375,11 @@ class Ledger:
         intraday netting keep input order within a day, so trades from two files touching the
         same day must interleave by time, not by which file came first."""
         self._require_profile(profile_id)
+        ordered = sorted(self._select(profile_id), key=_replay_order)
+        return [trade for _, trade, _ in ordered]
+
+    def _select(self, profile_id: int) -> list[tuple[int, Trade, str]]:
+        """(row id, trade, dedupe key) for every live trade of the profile."""
         charges: dict[int, dict[str, Decimal]] = {}
         for trade_row, kind, amount in self._db.execute(
                 "SELECT c.trade_id, c.kind, c.amount FROM trade_charge c"
@@ -257,20 +387,20 @@ class Ledger:
             charges.setdefault(trade_row, {})[kind] = text_decimal(amount)
         rows = self._db.execute(
             "SELECT t.id, t.source_id, t.trade_date, COALESCE(i.isin, i.contract_symbol),"
-            " t.side, t.quantity, t.price, t.segment, t.executed_at"
+            " t.side, t.quantity, t.price, t.segment, t.executed_at, t.dedupe_key"
             " FROM trade t JOIN instrument i ON i.id = t.instrument_id"
             " JOIN import_batch b ON b.id = t.batch_id"
             " WHERE t.profile_id = ? AND b.undone_at IS NULL ORDER BY t.id", (profile_id,))
-        ordered = sorted(((row[0], _trade(row, charges.get(row[0], {}))) for row in rows),
-                         key=_replay_order)
-        return [trade for _, trade in ordered]
+        return [(row[0], _trade(row[:9], charges.get(row[0], {})), row[9]) for row in rows]
+
+
 
     def batches(self, profile_id: int) -> list[dict[str, Any]]:
         self._require_profile(profile_id)
         cursor = self._db.execute(
             "SELECT id, kind, broker, file_name, file_sha256, imported_at, date_from, date_to,"
-            " trades_added FROM import_batch WHERE profile_id = ? AND undone_at IS NULL"
-            " ORDER BY id", (profile_id,))
+            " rows_read, trades_added, duplicates_skipped FROM import_batch"
+            " WHERE profile_id = ? AND undone_at IS NULL ORDER BY id", (profile_id,))
         names = [c[0] for c in cursor.description]
         return [dict(zip(names, row, strict=True)) for row in cursor]
 
@@ -308,10 +438,20 @@ def _statements(sql: str) -> list[str]:
     return statements
 
 
-def _replay_order(item: tuple[int, Trade]) -> tuple[date, bool, datetime, int]:
+def _source(trade: Trade) -> str:
+    """The importer that made the trade id: the text before its first ':'."""
+    return trade.trade_id.split(":", 1)[0]
+
+
+def _timed_details(trade: Trade) -> tuple[str, ...]:
+    at = trade.executed_at
+    return (*details(trade), at.isoformat() if at else "")
+
+
+def _replay_order(item: tuple[int, Trade, str]) -> tuple[date, bool, datetime, int]:
     """Same order as ``importers.tabular._order_key``; an aware time is compared as IST wall
     time so it sorts with the naive exchange times the importers give."""
-    row_id, trade = item
+    row_id, trade, _ = item
     at = trade.executed_at
     if at is not None and at.tzinfo is not None:
         at = at.astimezone(IST).replace(tzinfo=None)

@@ -507,3 +507,43 @@ Five sheets:
   (task 4) or a single shared replay across years would cut it if needed.
 - `*.kosh` (backups) and `*.sqlite-*` (SQLite side files) are git-ignored. A test fails if a
   ledger or backup file is ever committed.
+
+### Task 2 — import into the ledger (2026-10-10, approved)
+
+- **One batch per file**, so each file can be undone on its own. A file already imported
+  (same SHA-256, live batch) is recognised before it is read.
+- **Duplicate key (D3):**
+  - For broker files, the key is the segment plus the importer's trade id. That id already
+    holds the broker, exchange, trade date and exchange trade number. The order ID isn't
+    added: exchange trade numbers are unique per exchange and day on their own.
+  - For the CAS, which has no IDs (its ids are positions in the file), the key is a SHA-256 of
+    date, time, instrument, side, quantity and price, plus how many times that combination
+    has appeared in the file so far. Amounts are compared by value, so `10` and `10.0` match.
+- **Same key, different details:** the whole file is refused, with both trades shown side by
+  side. Nothing from that file is stored.
+- **Nothing new:** no batch is recorded. The screen still reports how many trades were
+  skipped.
+- **Undo:** a two-step Undo on each history row. The batch stays in the file, marked undone,
+  and the same file can be imported again.
+- **Removed:** the old "Clear all" button. Saved trades are removed with Undo instead.
+- **Still in page memory until task 3:** fund classes, 31-Jan-2018 prices, names,
+  brought-forward losses, hand-entered purchases and excluded sales.
+- **One default profile ("Me")** until task 3 adds the profile switcher. Its name is read
+  from `localStorage["kosh.profile"]`.
+- **Known gap for task 11 (D7):** an Angel One trade imported by name (`NAME:…`) and later
+  re-imported with its ISIN mapped has the same id but a different instrument. It is refused
+  as a conflict. The mapping step must rewrite the stored instrument instead.
+- **E2E isolation:** each Playwright run uses a fresh temporary `KOSH_DATA_DIR` and never
+  reuses a running server. Each test uses its own profile.
+- **The same trades under another broker name** (from the QA review): a mapped file's trade ids
+  use the broker name the user types.
+  - When trades have execution times, a trade matching a saved trade from another source to
+    the second is refused as `other_source`.
+  - Without times, Kosh can't tell such a match from a genuine second trade, so the trade is
+    saved and the screen shows a warning.
+  - **Accepted risk:** two genuine fills at two brokers in the same second, at the same price,
+    are refused. The screen explains why.
+- **A multi-file import reads every file before saving any.** After a failed import or undo,
+  the screen reloads from the ledger. Undo also drops hand-entered purchases and exclusions
+  for sales that are no longer saved.
+- **CAS reversal of a purchase saved from an older CAS:** not handled yet; logged as Q-036.

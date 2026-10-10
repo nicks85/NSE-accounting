@@ -147,7 +147,7 @@ def test_batch_arguments_are_checked(ledger: Ledger) -> None:
     with pytest.raises(LedgerError, match="unknown batch kind"):
         ledger.add_batch(person, Batch(kind="email"), [])
     with pytest.raises(LedgerError, match="one dedupe key"):
-        ledger.add_batch(person, Batch(), [buy("2025-04-02", 1, 10)], dedupe_keys=[])
+        ledger.add_batch(person, Batch(), [buy("2025-04-02", 1, 10)], keys=[])
 
 
 def test_same_instrument_across_batches_and_profiles_shares_one_row(ledger: Ledger) -> None:
