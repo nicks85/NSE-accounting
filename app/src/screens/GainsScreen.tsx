@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { inr, isZero, qty, useReport, type BusinessLine, type Citation, type GainLine, type Report } from "../report";
 import { useSession, type FundClass } from "../state";
+import { MissingHistory } from "./MissingHistory";
 
 const YEARS = [
   { start: 2024, label: "FY 2024-25 (AY 2025-26)" },
@@ -180,6 +181,7 @@ export function GainsScreen() {
         <>
           {state.stale && <p className="muted" aria-live="polite">Updating…</p>}
           <NeedsInput report={state.report} unclassified={state.unclassified} />
+          <MissingHistory report={state.report} />
 
           <section aria-label="Summary">
             <h3>Summary — {state.report.tax_year} ({state.report.act})</h3>
@@ -188,11 +190,23 @@ export function GainsScreen() {
                 {state.report.summary.bucket_nets.map((a) => <tr key={`n${a.label}`}><td>Net {a.label}</td><td className="num">{inr(a.amount)}</td></tr>)}
                 {state.report.summary.exemption_used.map((a) => <tr key={`e${a.label}`}><td>₹1.25 lakh exemption used ({a.label})</td><td className="num">{inr(a.amount)}</td></tr>)}
                 {state.report.summary.taxable.map((a) => <tr key={`t${a.label}`}><td>Taxable {a.label}</td><td className="num">{inr(a.amount)}</td></tr>)}
-                <tr className="total"><td>Tax at special rates (rounded to ₹10)</td><td className="num">{inr(state.report.summary.special_rate_tax_rounded)}</td></tr>
+                <tr className="total">
+                  <td>Tax at special rates (rounded to ₹10)</td>
+                  <td className="num">{state.report.complete
+                    ? inr(state.report.summary.special_rate_tax_rounded)
+                    : <span className="pill pill-warn">Incomplete: {state.report.missing_history.length} sale(s) missing purchase history</span>}</td>
+                </tr>
                 <tr><td>Intraday (speculative) income after set-off</td><td className="num">{inr(state.report.summary.speculative_after_setoff)}</td></tr>
                 <tr><td>F&amp;O (non-speculative) income after set-off</td><td className="num">{inr(state.report.summary.non_speculative_after_setoff)}</td></tr>
               </tbody>
             </table>
+            {!state.report.complete && (
+              <p role="status">The tax figure is withheld because some sales have no purchase to match. The amounts above
+                leave those sales out and may change once the purchases are added.</p>
+            )}
+            {state.report.excluded_sales.length > 0 && (
+              <p role="status">Excludes {state.report.excluded_sales.length} sale(s) ({inr(state.report.excluded_value)} sale value) with missing purchase history.</p>
+            )}
             <p className="muted">Slab-rate gains and business income are taxed at your slab rates, outside the special-rate figure. Surcharge and cess are not included.</p>
           </section>
 

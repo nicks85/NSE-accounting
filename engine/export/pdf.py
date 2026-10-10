@@ -94,6 +94,10 @@ def _table(rows: Sequence[Sequence[Any]], widths: list[float],
 
 def render_summary(report: TaxYearReport, *, names: Mapping[str, str] | None = None) -> bytes:
     """Render ``report`` as a PDF and return its bytes."""
+    if not report.complete:
+        from engine.export.itr import ExportError, incomplete_message
+
+        raise ExportError(incomplete_message(report))
     names = names or {}
     styles = getSampleStyleSheet()
     body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=8, leading=10)

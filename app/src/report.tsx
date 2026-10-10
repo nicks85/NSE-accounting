@@ -39,6 +39,17 @@ export type Report = {
   expired: Loss[];
   open_lots: { instrument: string; isin: string; acquired_on: string; quantity: string; cost: string; segment: string }[];
   warnings: Notice[];
+  /** False while a sale is missing purchase history: the tax figure is withheld. */
+  complete: boolean;
+  missing_history: Shortfall[];
+  excluded_sales: Shortfall[];
+  /** Total sale value of excluded_sales (exact decimal string). */
+  excluded_value: string;
+};
+/** The part of a sale with no earlier purchase to match. */
+export type Shortfall = {
+  trade_id: string; instrument: string; isin: string; sold_on: string; quantity: string;
+  price: string; sale_value: string; segment: "EQUITY" | "FNO" | "MF";
 };
 
 export type ReportState =
@@ -53,10 +64,10 @@ const ReportContext = createContext<ReportState>({ status: "idle" });
 export function ReportProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
   const [state, setState] = useState<ReportState>({ status: "idle" });
-  const { trades, year, fundClasses, fmv2018, broughtForward } = session;
+  const { trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded } = session;
   useEffect(() => {
     let current = true;
-    if (trades.length === 0 && broughtForward.length === 0) {
+    if (trades.length === 0 && manualBuys.length === 0 && broughtForward.length === 0) {
       setState({ status: "idle" });
       return;
     }
@@ -73,7 +84,7 @@ export function ReportProvider({ children }: { children: ReactNode }) {
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when inputs change
-  }, [trades, year, fundClasses, fmv2018, broughtForward]);
+  }, [trades, year, fundClasses, fmv2018, broughtForward, manualBuys, excluded]);
   return <ReportContext.Provider value={state}>{children}</ReportContext.Provider>;
 }
 

@@ -37,19 +37,46 @@ class InsufficientHoldingsError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class Shortfall:
+    """The part of a sell with no earlier purchase to match: "missing purchase history".
+
+    The matched part of the sell (if any) is disposed of normally; this part is left out, so no
+    cost is ever assumed for it. Which lots a sale used is only provisional while a shortfall
+    is unresolved: the missing purchase is likely older than every known lot, and FIFO would
+    have used it first.
+    """
+
+    trade_id: str
+    instrument: str
+    sold_on: date
+    quantity: Decimal
+    price: Decimal
+    segment: Segment
+
+    @property
+    def sale_value(self) -> Decimal:
+        return self.quantity * self.price
+
+
+@dataclass(frozen=True, slots=True)
 class MatchResult:
     disposals: tuple[Disposal, ...]
     open_lots: tuple[Lot, ...]
     warnings: tuple[str, ...] = ()
+    shortfalls: tuple[Shortfall, ...] = ()
 
 
 class FifoBook:
     """Mutable per-instrument FIFO queues. Feed trades in chronological order."""
 
-    def __init__(self, opening_lots: Iterable[Lot] = (), *, allow_short: bool = False) -> None:
+    def __init__(self, opening_lots: Iterable[Lot] = (), *, allow_short: bool = False,
+                 collect_shortfalls: bool = False) -> None:
         """``allow_short`` lets cash-equity sells open short positions; used only for
-        intraday trades, which are squared off the same day."""
+        intraday trades, which are squared off the same day. ``collect_shortfalls`` records a
+        sell beyond the quantity held as a ``Shortfall`` instead of raising."""
         self._allow_short = allow_short
+        self._collect = collect_shortfalls
+        self._shortfalls: list[Shortfall] = []
         self._lots: dict[str, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
         self._warnings: list[str] = []
@@ -110,10 +137,17 @@ class FifoBook:
         if not is_buy and trade.segment is not Segment.FNO and not self._allow_short:
             held = sum((lot.quantity for lot in queue if lot.is_long), Decimal(0))
             if held < trade.quantity:  # checked up front so a failed sell leaves the book intact
-                raise InsufficientHoldingsError(
-                    f"{trade.trade_id}: selling {trade.quantity} of {trade.instrument} on "
-                    f"{trade.trade_date} but only {held} held"
-                )
+                if not self._collect:
+                    raise InsufficientHoldingsError(
+                        f"{trade.trade_id}: selling {trade.quantity} of {trade.instrument} on "
+                        f"{trade.trade_date} but only {held} held"
+                    )
+                self._shortfalls.append(Shortfall(
+                    trade.trade_id, trade.instrument, trade.trade_date,
+                    trade.quantity - held, trade.price, trade.segment))
+                if held <= 0:
+                    return
+                trade, _ = trade.split(held)
         remaining = trade
         while queue and queue[0].is_long != is_buy:
             lot, rest = queue[0].take(min(remaining.quantity, abs(queue[0].quantity)))
@@ -175,6 +209,7 @@ class FifoBook:
             disposals=tuple(self._disposals),
             open_lots=open_lots,
             warnings=tuple(warnings),
+            shortfalls=tuple(self._shortfalls),
         )
 
 
@@ -184,13 +219,15 @@ def match_fifo(
     actions: Iterable[CorporateAction] = (),
     *,
     allow_short: bool = False,
+    collect_shortfalls: bool = False,
 ) -> MatchResult:
     """Match trades FIFO, applying corporate actions on their ex-dates.
 
     Events are ordered by date; on the same date corporate actions come before trades
     (trades on the ex-date are at post-action prices). Input order is kept within a day.
     """
-    book = FifoBook(opening_lots, allow_short=allow_short)
+    book = FifoBook(opening_lots, allow_short=allow_short,
+                    collect_shortfalls=collect_shortfalls)
     events: list[tuple[date, int, Trade | CorporateAction]] = [
         (a.ex_date, 0, a) for a in actions
     ]

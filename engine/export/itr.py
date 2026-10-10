@@ -58,6 +58,13 @@ class ExportError(ValueError):
     """The report can't be exported (unsupported year, or a gain type the form can't hold)."""
 
 
+def incomplete_message(report: TaxYearReport) -> str:
+    """Why an incomplete year can't be exported (shared by the JSON and PDF exports)."""
+    count = len(report.missing_history)
+    return (f"{count} sale(s) are missing purchase history; add each purchase or exclude the "
+            "sale on the Gains screen before exporting")
+
+
 @dataclass(frozen=True, slots=True)
 class ItrExport:
     form: str
@@ -338,6 +345,8 @@ def export_itr(report: TaxYearReport, *, form: str | None = None,
 
     ``names`` maps ISIN → share/scheme name (Schedule 112A needs a name for pre-2018 holdings).
     """
+    if not report.complete:
+        raise ExportError(incomplete_message(report))
     chosen = form or choose_form(report)
     if chosen == "ITR-2" and report.business.lines:
         raise ExportError("ITR-2 can't carry intraday or F&O income; use ITR-3")

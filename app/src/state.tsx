@@ -18,6 +18,12 @@ export type FundClass = "equity-oriented" | "specified" | "other";
 
 export type LossEntry = { origin_year: number; kind: string; amount: string };
 
+/** How a hand-entered purchase was acquired; guides which date and price the user enters (Q-029). */
+export type Acquired = "bought" | "ipo" | "bonus" | "gift" | "esop" | "transfer";
+
+/** A purchase the user entered for a sale with missing purchase history. */
+export type ManualBuy = { trade: Trade; how: Acquired; forTrade: string };
+
 export type Session = {
   trades: Trade[];
   sources: string[];
@@ -28,6 +34,10 @@ export type Session = {
   broughtForward: LossEntry[];
   /** Fund classes pre-filled from a CAS guess, not yet confirmed by the user. */
   unconfirmed: string[];
+  /** Purchases entered by hand for sales whose purchase isn't in any imported file. */
+  manualBuys: ManualBuy[];
+  /** Sell trade ids the user chose to leave out (missing purchase history, Q-031). */
+  excluded: string[];
 };
 
 export const EMPTY_SESSION: Session = {
@@ -39,6 +49,8 @@ export const EMPTY_SESSION: Session = {
   names: {},
   broughtForward: [],
   unconfirmed: [],
+  manualBuys: [],
+  excluded: [],
 };
 
 type Change = Partial<Session> | ((current: Session) => Partial<Session>);
@@ -73,9 +85,10 @@ export function useSession(): Store {
 export function computeParams(session: Session) {
   return {
     year: session.year,
-    trades: session.trades,
+    trades: [...session.trades, ...session.manualBuys.map((m) => m.trade)],
     fund_classes: session.fundClasses,
     fmv_2018: session.fmv2018,
     brought_forward: session.broughtForward,
+    excluded: session.excluded,
   };
 }

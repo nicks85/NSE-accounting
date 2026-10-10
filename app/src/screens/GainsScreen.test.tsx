@@ -22,6 +22,7 @@ function report(overrides: object = {}) {
       income: "500", speculative: true, citations: [CITE] }],
     setoff_steps: [{ loss: "LTCG exemption", against: "LTCG @ 12.5%", amount: "125000", citation: CITE }],
     carried_forward: [], expired: [], open_lots: [],
+    complete: true, missing_history: [], excluded_sales: [], excluded_value: "0",
     warnings: [{ code: "UNVERIFIED", message: "Disposals assumed STT-paid", question: "Q-009", ref: null }],
     ...overrides,
   };
@@ -138,5 +139,58 @@ describe("GainsScreen inputs (QA)", () => {
     expect(JSON.parse(screen.getByTestId("state").textContent!).unconfirmed).toEqual([]);
     expect(screen.queryByText(/guessed from the CAS/)).toBeNull();
     expect(screen.getByLabelText("Summary")).toBeTruthy(); // not unmounted by the recompute
+  });
+});
+
+const GAP = { trade_id: "S1", instrument: "INE000A01011", isin: "INE000A01011", sold_on: "2025-06-10", quantity: "100",
+  price: "300", sale_value: "30000", segment: "EQUITY" };
+
+describe("GainsScreen missing purchase history", () => {
+  it("withholds the tax figure and adds a hand-entered purchase as a MANUAL buy", async () => {
+    const calls = mockEngine(report({ complete: false, missing_history: [GAP] }));
+    await renderWith({});
+    const summary = await screen.findByLabelText("Summary");
+    expect(within(summary).queryByText("₹1,09,380.00")).toBeNull();
+    expect(within(summary).getByText("Incomplete: 1 sale(s) missing purchase history")).toBeTruthy();
+    const gaps = screen.getByLabelText("Missing purchase history");
+    fireEvent.click(within(gaps).getByRole("button", { name: "Add the purchase" }));
+    const add = within(gaps).getByRole("button", { name: "Add purchase" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    fireEvent.change(within(gaps).getByLabelText("Purchase date"), { target: { value: "2025-07-01" } });
+    expect(within(gaps).getByText(/a purchase date before the sale/)).toBeTruthy();
+    fireEvent.change(within(gaps).getByLabelText("Purchase date"), { target: { value: "2023-01-02" } });
+    fireEvent.change(within(gaps).getByLabelText("Price per share (₹)"), { target: { value: "1,00.50" } });
+    fireEvent.change(within(gaps).getByLabelText("How you got these shares"), { target: { value: "ipo" } });
+    expect(within(gaps).getByText(/issue price you paid/)).toBeTruthy();
+    await act(async () => fireEvent.click(add));
+    const session = JSON.parse(screen.getByTestId("state").textContent!);
+    expect(session.manualBuys).toEqual([{ how: "ipo", forTrade: "S1", trade: {
+      trade_id: "MANUAL:1", trade_date: "2023-01-02", instrument: "INE000A01011", side: "BUY", quantity: "100",
+      price: "100.50", charges: "0", stt: "0", segment: "EQUITY", executed_at: null } }]);
+    const sent = calls.filter((c) => c.method === "compute").at(-1)!.params.trades as { trade_id: string }[];
+    expect(sent.map((t) => t.trade_id)).toEqual(["x", "MANUAL:1"]);
+    expect(within(screen.getByLabelText("Missing purchase history")).getByText("IPO allotment")).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove" })));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).manualBuys).toEqual([]);
+  });
+
+  it("excludes a sale, labels the total and can include it again", async () => {
+    const calls = mockEngine(report({ excluded_sales: [GAP], excluded_value: "30000" }));
+    await renderWith({ excluded: ["S1", "OLD"] });
+    const summary = await screen.findByLabelText("Summary");
+    expect(within(summary).getByText("₹1,09,380.00")).toBeTruthy();
+    expect(within(summary).getByText(/Excludes 1 sale\(s\) \(₹30,000.00 sale value\)/)).toBeTruthy();
+    expect(calls.filter((c) => c.method === "compute").at(-1)!.params.excluded).toEqual(["S1", "OLD"]);
+    const gaps = screen.getByLabelText("Missing purchase history");
+    expect(within(gaps).getByText(/Sale OLD \(not in this year/)).toBeTruthy();
+    await act(async () => fireEvent.click(within(gaps).getAllByRole("button", { name: "Include again" })[0]));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).excluded).toEqual(["OLD"]);
+  });
+
+  it("excludes from the gap row", async () => {
+    mockEngine(report({ complete: false, missing_history: [GAP] }));
+    await renderWith({});
+    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Exclude this sale" })));
+    expect(JSON.parse(screen.getByTestId("state").textContent!).excluded).toEqual(["S1"]);
   });
 });

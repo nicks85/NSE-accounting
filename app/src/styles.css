@@ -53,6 +53,10 @@ button.link { background: none; border: none; color: var(--accent); text-decorat
 .why-row td { background: #fafbfc; }
 .needs { border: 1px solid #e6c98a; background: var(--warn-soft); border-radius: 6px; padding: 8px 12px; }
 .needs .row { margin: 6px 0; }
+.gaps { padding-left: 18px; }
+.gaps > li { margin: 8px 0; }
+.purchase-form { margin: 6px 0 10px; }
+.purchase-form select, .purchase-form input { max-width: 100%; box-sizing: border-box; }
 .note { border-left: 3px solid var(--line); padding: 4px 10px; margin: 4px 0; color: var(--muted); }
 tr.total td { font-weight: 700; }
 .source { display: block; color: var(--muted); font-size: 0.85em; }

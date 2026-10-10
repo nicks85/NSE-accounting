@@ -204,3 +204,18 @@ def test_import_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rpc, "MAX_IMPORT_BYTES", 3)
     response = call("import", broker="zerodha", files=[{"name": "a", "data_base64": b64("abcd")}])
     assert "larger than" in response["error"]["message"]
+
+
+def test_compute_reports_missing_history_and_exclusions() -> None:
+    sale = trade_to_json(sell("2025-06-01", 5, 300, trade_id="S9"))
+    report = ok("compute", year=2025, trades=[sale])
+    assert report["complete"] is False
+    assert report["missing_history"] == [{
+        "trade_id": "S9", "instrument": A, "isin": A, "sold_on": "2025-06-01", "quantity": "5",
+        "price": "300", "sale_value": "1500", "segment": "EQUITY"}]
+    excluded = ok("compute", year=2025, trades=[sale], excluded=["S9"])
+    assert excluded["complete"] is True and excluded["missing_history"] == []
+    assert excluded["excluded_sales"][0]["trade_id"] == "S9"
+    assert excluded["excluded_value"] == "1500"
+    refused = call("export_itr", year=2025, trades=[sale])
+    assert "missing purchase history" in refused["error"]["message"]
