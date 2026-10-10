@@ -44,3 +44,11 @@ export async function rpc<T>(method: string, params: object = {}): Promise<T> {
   if (reply.error) throw new EngineError(reply.error.type, reply.error.message);
   return reply.result as T;
 }
+
+/** A chosen file's bytes as base64, for sending to the engine. */
+export async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}

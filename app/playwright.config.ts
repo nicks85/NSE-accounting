@@ -13,7 +13,12 @@ const port = Number(process.env.KOSH_E2E_PORT ?? 4173);
 export default defineConfig({
   testDir: "./e2e",
   use: { baseURL: `http://localhost:${port}` },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /backup\.spec\.ts/ },
+    // Restoring replaces the whole ledger every test shares, so these run after all the others.
+    { name: "backup", use: { ...devices["Desktop Chrome"] }, testMatch: /backup\.spec\.ts/,
+      dependencies: ["chromium"], fullyParallel: false },
+  ],
   webServer: {
     command: `pnpm exec vite preview --port ${port} --strictPort`,
     url: `http://localhost:${port}`,
