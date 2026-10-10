@@ -25,7 +25,9 @@ HIDDEN_IMPORTS = [
     "importers.cas", "importers.mapped", "importers.tabular", "importers.upstox",
     "importers.zerodha", "importers.xlsx", "engine.export.itr", "engine.export.json_out",
     "engine.export.pdf", "engine.export.schemas_registry", "engine.export.skeleton",
-    "engine.export.schemas", "msoffcrypto.format.ooxml", "casparser.parsers.cams_detailed",
+    "engine.export.schemas", "engine.ledger", "engine.ledger.store", "engine.ledger.dedupe",
+    "engine.ledger.migrations", "engine.ledger.paths", "importers.angel_one",
+    "msoffcrypto.format.ooxml", "casparser.parsers.cams_detailed",
 ]
 DATA_PACKAGES = ["engine.export.schemas", "reportlab", "casparser", "casparser_isin",
                  "jsonschema_specifications"]

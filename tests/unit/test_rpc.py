@@ -219,3 +219,82 @@ def test_compute_reports_missing_history_and_exclusions() -> None:
     assert excluded["excluded_value"] == "1500"
     refused = call("export_itr", year=2025, trades=[sale])
     assert "missing purchase history" in refused["error"]["message"]
+
+
+def zerodha_file(name: str, rows: list[Row]) -> dict[str, str]:
+    return {"name": name, "data_base64": b64(tradebook_csv(rows))}
+
+
+APRIL = [Row("SYNTHA", "2025-04-02", "buy", "10", "100"),
+         Row("SYNTHA", "2025-04-03", "buy", "5", "110")]
+
+
+def test_ledger_profile_import_dedupe_and_undo(ledger_dir: Path) -> None:
+    opened = ok("ledger_profile", name="Synthetic")
+    person = opened["profile"]["id"]
+    assert (opened["trades"], opened["batches"]) == ([], [])
+    assert ok("ledger_profile")["profile"]["name"] == "Me"
+    first = ok("ledger_import", profile_id=person, broker="zerodha",
+               files=[zerodha_file("apr.csv", APRIL)])
+    assert first["files"] == [{"name": "apr.csv", "added": 2, "duplicates": 0,
+                               "already_imported_on": None, "conflicts": [],
+                               "possible_duplicates": 0}]
+    assert len(first["trades"]) == 2 and first["batches"][0]["broker"] == "zerodha"
+    assert (ledger_dir / "kosh.sqlite").is_file()
+
+    again = ok("ledger_import", profile_id=person, broker="zerodha",
+               files=[zerodha_file("apr.csv", APRIL), zerodha_file("all.csv", [
+                   *APRIL, Row("SYNTHA", "2025-05-02", "sell", "15", "120")])])
+    assert again["files"][0]["already_imported_on"] is not None
+    assert (again["files"][1]["added"], again["files"][1]["duplicates"]) == (1, 2)
+    assert len(again["trades"]) == 3 and len(again["batches"]) == 2
+
+    state = ok("ledger_state", profile_id=person)
+    assert state["trades"] == again["trades"]
+    undone = ok("ledger_undo", profile_id=person, batch_id=again["batches"][1]["id"])
+    assert undone["removed"] == 1 and len(undone["trades"]) == 2
+
+
+def test_ledger_import_reports_conflicts(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
+    changed = [Row("SYNTHA", "2025-04-02", "buy", "10", "101"), *APRIL[1:]]
+    result = ok("ledger_import", profile_id=person, broker="zerodha",
+                files=[zerodha_file("b.csv", changed)])
+    [conflict] = result["files"][0]["conflicts"]
+    assert (conflict["new"]["price"], conflict["existing"]["price"]) == ("101", "100")
+    assert len(result["trades"]) == 2 and result["warnings"] == []
+
+
+def test_ledger_requests_are_checked(ledger_dir: Path) -> None:
+    assert "profile_id" in call("ledger_state")["error"]["message"]
+    assert "profile_id" in call("ledger_state", profile_id=True)["error"]["message"]
+    assert "batch_id" in call("ledger_undo", profile_id=1, batch_id="1")["error"]["message"]
+    person = ok("ledger_profile")["profile"]["id"]
+    assert "no import" in call("ledger_undo", profile_id=person, batch_id=99)["error"]["message"]
+
+
+def test_a_bad_file_saves_nothing_from_the_same_request(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    bad = {"name": "bad.csv", "data_base64": b64("not,a,tradebook\n")}
+    assert "error" in call("ledger_import", profile_id=person, broker="zerodha",
+                           files=[zerodha_file("good.csv", APRIL), bad])
+    assert ok("ledger_state", profile_id=person)["trades"] == []
+
+
+def test_the_same_trades_under_another_mapped_name_are_refused(ledger_dir: Path) -> None:
+    """A mapped file's ids use the broker name the user types; renaming it must not double
+    count (QA, task 2)."""
+    person = ok("ledger_profile")["profile"]["id"]
+    mapping = {"trade_date": "trade_date", "side": "trade_type", "quantity": "quantity",
+               "price": "price", "trade_id": "trade_id", "isin": "isin", "exchange": "exchange",
+               "segment": "segment", "executed_at": "order_execution_time"}
+    first = ok("ledger_import", profile_id=person, broker="mapped", mapping=mapping,
+               key="GROWW", files=[zerodha_file("g.csv", APRIL)])
+    assert first["files"][0]["added"] == 2
+    renamed = ok("ledger_import", profile_id=person, broker="mapped", mapping=mapping,
+                 key="GROWWINDIA", files=[zerodha_file("g2.csv", [
+                     *APRIL, Row("SYNTHA", "2025-05-02", "sell", "15", "120")])])
+    conflicts = renamed["files"][0]["conflicts"]
+    assert [c["reason"] for c in conflicts] == ["other_source", "other_source"]
+    assert len(renamed["trades"]) == 2

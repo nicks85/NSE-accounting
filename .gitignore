@@ -20,7 +20,9 @@ app/src-tauri/gen/
 
 # Local data — never commit
 *.sqlite
+*.sqlite-*
 *.db
+*.kosh
 .DS_Store
 app/*.tsbuildinfo
 

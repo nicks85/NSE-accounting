@@ -493,3 +493,15 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Resolves when:** the bundled company list (brief 0001 task 11) supplies the ISIN, after
   which the existing fund-class question on the Gains screen applies.
 - **Status:** open.
+
+## Q-036 — A CAS reversal of a purchase saved from an older CAS
+
+- **Status:** open, not handled (logged 2026-10-10 from the task 2 review).
+- **What happens:** the CAS importer cancels a reversed purchase only within the same
+  statement (`importers/cas.py`, `_cancel_purchase`). If an older CAS was imported first and
+  its purchase is reversed in a later statement, the later file only carries the reversal.
+  The purchase saved from the older file then stays in the ledger, with phantom units.
+- **Workaround today:** undo the older CAS import and import the newer, longer CAS, which
+  covers both the purchase and its reversal.
+- **To decide:** whether a reversal with no matching purchase in the file should cancel a
+  saved purchase with the same date, units and NAV, or stop the import and ask.

@@ -57,7 +57,7 @@ fails if one is committed.
 
 | Option | For | Against |
 |---|---|---|
-| **A. Trades are the source of truth. Lots and gains are rebuilt by replaying FIFO, with a cached year-end snapshot.** | Undo of an import is just "delete that batch and replay". Importing an older file later corrects every year automatically. There is one matcher, the one already tested, so matching can't drift between years. | A replay costs time. Expected to be milliseconds for tens of thousands of trades (to be measured in task 1). |
+| **A. Trades are the source of truth. Lots and gains are rebuilt by replaying FIFO, with a cached year-end snapshot.** | Undo of an import is just "delete that batch and replay". Importing an older file later corrects every year automatically. There is one matcher, the one already tested, so matching can't drift between years. | A replay costs time. Expected to be milliseconds for tens of thousands of trades; measured at about 1.3 s for 20,000 trades over three years (see Implementation notes). |
 | B. Mutable open-lots table carried forward each year | Close to how people think about it | Undo and late imports need complex rollback. Two sources of truth. |
 
 **Recommendation: A.** "Open lots carry forward" becomes a view: the lots still open at 31
@@ -484,3 +484,66 @@ Five sheets:
    - Buyback sales, reported separately from FY 2025-26.
 
    These go into Q-033 and Q-034.
+
+## Implementation notes
+
+### Task 1 — ledger store (2026-10-10, approved)
+
+- **Code:** `engine/ledger/` (`store.py`, `migrations.py`, `paths.py`). Standard-library
+  `sqlite3` only, with foreign keys on. Every write is one transaction.
+- **Migrations are Python strings, not `.sql` files**, so the bundled engine needs no extra
+  data files. A file whose schema is newer than the app is refused unchanged. A SQLite file
+  that isn't a Kosh ledger is refused too.
+- **Two schema changes from the sketch above:**
+  - `trade.source_id` keeps the engine's trade id, so a replayed trade is identical to the
+    imported one, and exclusions and hand-entered purchases can refer to it.
+  - `instrument.isin` may hold a `NAME:` placeholder until the ISIN is mapped (D7).
+- **Charges** are stored as one `OTHER` row plus `STT` until the breakdown lands (task 10).
+- **Data folder:** the engine works out the Tauri app-data folder itself. `KOSH_DATA_DIR`
+  overrides it for tests and E2E. The desktop shell doesn't need to pass a path yet.
+- **Replay time, measured:** 20,000 trades over 2019–2026, computing three tax years, takes
+  **about 1.3 s** on an Apple-silicon laptop. That's slower than the "milliseconds" guessed in
+  D2, because each year replays the full history. It's acceptable for now. Year snapshots
+  (task 4) or a single shared replay across years would cut it if needed.
+- `*.kosh` (backups) and `*.sqlite-*` (SQLite side files) are git-ignored. A test fails if a
+  ledger or backup file is ever committed.
+
+### Task 2 — import into the ledger (2026-10-10, approved)
+
+- **One batch per file**, so each file can be undone on its own. A file already imported
+  (same SHA-256, live batch) is recognised before it is read.
+- **Duplicate key (D3):**
+  - For broker files, the key is the segment plus the importer's trade id. That id already
+    holds the broker, exchange, trade date and exchange trade number. The order ID isn't
+    added: exchange trade numbers are unique per exchange and day on their own.
+  - For the CAS, which has no IDs (its ids are positions in the file), the key is a SHA-256 of
+    date, time, instrument, side, quantity and price, plus how many times that combination
+    has appeared in the file so far. Amounts are compared by value, so `10` and `10.0` match.
+- **Same key, different details:** the whole file is refused, with both trades shown side by
+  side. Nothing from that file is stored.
+- **Nothing new:** no batch is recorded. The screen still reports how many trades were
+  skipped.
+- **Undo:** a two-step Undo on each history row. The batch stays in the file, marked undone,
+  and the same file can be imported again.
+- **Removed:** the old "Clear all" button. Saved trades are removed with Undo instead.
+- **Still in page memory until task 3:** fund classes, 31-Jan-2018 prices, names,
+  brought-forward losses, hand-entered purchases and excluded sales.
+- **One default profile ("Me")** until task 3 adds the profile switcher. Its name is read
+  from `localStorage["kosh.profile"]`.
+- **Known gap for task 11 (D7):** an Angel One trade imported by name (`NAME:…`) and later
+  re-imported with its ISIN mapped has the same id but a different instrument. It is refused
+  as a conflict. The mapping step must rewrite the stored instrument instead.
+- **E2E isolation:** each Playwright run uses a fresh temporary `KOSH_DATA_DIR` and never
+  reuses a running server. Each test uses its own profile.
+- **The same trades under another broker name** (from the QA review): a mapped file's trade ids
+  use the broker name the user types.
+  - When trades have execution times, a trade matching a saved trade from another source to
+    the second is refused as `other_source`.
+  - Without times, Kosh can't tell such a match from a genuine second trade, so the trade is
+    saved and the screen shows a warning.
+  - **Accepted risk:** two genuine fills at two brokers in the same second, at the same price,
+    are refused. The screen explains why.
+- **A multi-file import reads every file before saving any.** After a failed import or undo,
+  the screen reloads from the ledger. Undo also drops hand-entered purchases and exclusions
+  for sales that are no longer saved.
+- **CAS reversal of a purchase saved from an older CAS:** not handled yet; logged as Q-036.

@@ -13,7 +13,7 @@ test("missing purchase history: total and export withheld until the purchase is 
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText(/Imported 3 trades/)).toBeVisible();
+  await expect(page.getByText(/Imported 3 new trades/)).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
 
   const total = page.locator("tr.total");
