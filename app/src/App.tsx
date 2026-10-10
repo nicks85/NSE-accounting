@@ -1,7 +1,7 @@
 import { useEffect, useState, type KeyboardEvent, type ReactElement } from "react";
 import { rpc } from "./engine";
 import { ReportProvider } from "./report";
-import { SessionProvider } from "./state";
+import { LedgerLoader, SessionProvider } from "./state";
 import "./styles.css";
 
 export const TABS = [
@@ -44,6 +44,7 @@ export function App({ screens = {} }: { screens?: Partial<Record<TabId, ReactEle
   }
   return (
     <SessionProvider>
+      <LedgerLoader />
       <ReportProvider>
       <div className="shell">
         <header className="header">

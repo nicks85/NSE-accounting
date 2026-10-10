@@ -12,7 +12,7 @@ test("holdings and brought-forward losses", async ({ page }) => {
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText(/Imported 4 trades/)).toBeVisible();
+  await expect(page.getByText(/Imported 4 new trades/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Holdings" }).click();
   await expect(page.getByLabel("Open lots")).toContainText("₹60,000.00");

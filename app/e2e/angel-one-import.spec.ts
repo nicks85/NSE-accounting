@@ -18,7 +18,7 @@ test("Angel One import works in one step, by company name, with charges", async 
   await page.getByLabel("Angel One trade history").check();
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "Trades_History.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText("Imported 2 trades from Angel One trade history")).toBeVisible();
+  await expect(page.getByText("Imported 2 new trades from Angel One trade history")).toBeVisible();
 
   await page.getByRole("tab", { name: "Gains" }).click();
   await expect(page.getByText("SYNTHETIC ALPHA LTD").first()).toBeVisible();

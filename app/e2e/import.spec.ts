@@ -8,17 +8,38 @@ const ROWS = [
 ];
 const tradebook = { name: "tradebook.csv", mimeType: "text/csv", buffer: Buffer.from([HEADER, ...ROWS].join("\n") + "\n") };
 
-test("import a tradebook through the real engine", async ({ page }) => {
+const LATER = "SYNTHA,INE000A01011,2026-01-05,NSE,EQ,EQ,buy,false,10,900,3,13,2026-01-05T09:45:00";
+const overlapping = { name: "tradebook-2.csv", mimeType: "text/csv", buffer: Buffer.from([HEADER, ...ROWS, LATER].join("\n") + "\n") };
+
+test("import into the saved ledger: duplicates, reload and undo", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText("Imported 2 trades from Zerodha tradebook (CSV)")).toBeVisible();
+  await expect(page.getByText("Imported 2 new trades from Zerodha tradebook (CSV)")).toBeVisible();
   await expect(page.getByText(/isn't confirmed against real files/)).toBeVisible();
-  await expect(page.getByText("2 trades — 2 shares")).toBeVisible();
+  await expect(page.getByText(/2 trades — 2 shares/)).toBeVisible();
 
+  // The same file again is recognised without reading it.
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText("2 were already loaded and were skipped.")).toBeVisible();
-  await expect(page.getByLabel("Loaded data").getByRole("listitem")).toHaveCount(1);
+  await expect(page.getByText(/tradebook.csv: already imported on/)).toBeVisible();
+
+  // An overlapping later file adds only what is new.
+  await page.getByLabel(/Choose tradebook/).setInputFiles(overlapping);
+  await page.getByRole("button", { name: "Import files" }).click();
+  await expect(page.getByText("tradebook-2.csv: 1 new trade, 2 already in your ledger and skipped.")).toBeVisible();
+  const history = page.getByRole("table", { name: "Import history" });
+  await expect(history.getByRole("row")).toHaveCount(3);
+
+  // Closing and reopening keeps everything.
+  await page.reload();
+  await expect(page.getByText(/3 trades — 3 shares/)).toBeVisible({ timeout: 30_000 });
+  await expect(history.getByRole("row")).toHaveCount(3);
+
+  // Undo the second import: its one trade goes, the first file's stay.
+  await page.getByRole("button", { name: "Undo import of tradebook-2.csv" }).click();
+  await page.getByRole("button", { name: "Remove 1 trade" }).click();
+  await expect(page.getByText(/2 trades — 2 shares/)).toBeVisible();
+  await expect(history.getByRole("row")).toHaveCount(2);
 });

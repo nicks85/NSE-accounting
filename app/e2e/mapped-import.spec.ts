@@ -18,7 +18,7 @@ test("mapped import needs the required columns, then imports through the engine"
     await page.getByLabel(label, { exact: true }).fill(value);
   }
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText("Imported 2 trades from Groww (mapped)")).toBeVisible();
+  await expect(page.getByText("Imported 2 new trades from Groww (mapped)")).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
   // STCG = 10 x (110 - 100.50) = 95 → ₹95.00 at 20%: tax 19 → rounded to ₹20.
   await expect(page.locator("tr.total")).toContainText("₹20.00");

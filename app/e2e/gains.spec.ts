@@ -11,7 +11,7 @@ test("gains: grandfathering input changes the tax, and why? shows the rule", asy
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
   await page.getByRole("button", { name: "Import files" }).click();
-  await expect(page.getByText(/Imported 2 trades/)).toBeVisible();
+  await expect(page.getByText(/Imported 2 new trades/)).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
 
   // Without the 2018 price: LTCG 10,00,000 - 1,25,000 = 8,75,000 x 12.5% = 1,09,375 → 1,09,380.
