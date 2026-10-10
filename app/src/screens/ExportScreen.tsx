@@ -73,6 +73,7 @@ function ShareNames() {
 
 export function ExportScreen() {
   const { session } = useSession();
+  const reportState = useReport();
   const [form, setForm] = useState("");
   const [busy, setBusy] = useState<"itr" | "pdf" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,8 +116,16 @@ export function ExportScreen() {
   }
 
   if (session.trades.length === 0) return <p className="muted">Import trades first.</p>;
+  const missing = reportState.status === "ready" ? reportState.report.missing_history.length : 0;
+  const blocked = busy !== null || missing > 0;
   return (
     <div>
+      {missing > 0 && (
+        <div className="notice" role="alert">
+          Export is off: {missing} sale(s) are missing purchase history. Add each purchase or exclude the sale on the
+          Gains screen first.
+        </div>
+      )}
       <section aria-label="ITR schedules">
         <h3>ITR schedules (JSON)</h3>
         <p className="muted">
@@ -132,7 +141,7 @@ export function ExportScreen() {
           <option value="ITR-3">ITR-3</option>
         </select>
         <div>
-          <button type="button" className="primary" disabled={busy !== null} onClick={exportItr}>
+          <button type="button" className="primary" disabled={blocked} onClick={exportItr}>
             {busy === "itr" ? "Preparing…" : "Download ITR schedules"}
           </button>
         </div>
@@ -152,7 +161,7 @@ export function ExportScreen() {
       <section aria-label="PDF summary">
         <h3>PDF summary</h3>
         <p className="muted">Totals, set-off, every line with the rule behind it, and all warnings — for your records or your CA.</p>
-        <button type="button" className="primary" disabled={busy !== null} onClick={exportPdf}>
+        <button type="button" className="primary" disabled={blocked} onClick={exportPdf}>
           {busy === "pdf" ? "Preparing…" : "Download PDF summary"}
         </button>
       </section>

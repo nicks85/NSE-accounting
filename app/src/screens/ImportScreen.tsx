@@ -189,7 +189,8 @@ export function ImportScreen() {
             </p>
             <ul>{session.sources.map((s, i) => <li key={i}>{s}</li>)}</ul>
             <button type="button" onClick={() => {
-              update({ trades: [], sources: [], fundClasses: {}, names: {}, fmv2018: {}, unconfirmed: [], broughtForward: [] });
+              update({ trades: [], sources: [], fundClasses: {}, names: {}, fmv2018: {}, unconfirmed: [], broughtForward: [],
+                       manualBuys: [], excluded: [] });
               setLast(null);
             }}>Clear all</button>
           </>

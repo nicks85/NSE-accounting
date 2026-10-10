@@ -13,6 +13,7 @@ const REPORT = {
     speculative_income: "0", non_speculative_income: "0", speculative_after_setoff: "0", non_speculative_after_setoff: "0" },
   capital_gains: [{ isin: "INE000A01011", acquired_on: "2015-01-01", bucket: "LTCG @ 12.5%", manual: false }],
   business_lines: [], setoff_steps: [], carried_forward: [], expired: [], open_lots: [], warnings: [],
+    complete: true, missing_history: [], excluded_sales: [], excluded_value: "0",
 };
 
 function mockEngine(replies: Record<string, object>) {
@@ -123,6 +124,17 @@ describe("ExportScreen in the desktop app", () => {
     } finally {
       delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
       invoke.mockReset();
+    }
+  });
+});
+
+describe("ExportScreen with missing purchase history", () => {
+  it("turns export off until every sale has a purchase or is excluded", async () => {
+    mockEngine({ compute: { result: { ...REPORT, complete: false, missing_history: [{ trade_id: "S1" }] } } });
+    await renderScreen();
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Export is off: 1 sale\(s\) are missing purchase history/);
+    for (const name of ["Download ITR schedules", "Download PDF summary"]) {
+      expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
     }
   });
 });
