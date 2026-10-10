@@ -18,8 +18,9 @@ from decimal import Decimal
 
 from engine.models import Trade
 
-ID_LESS_PREFIXES = ("CAS:",)
-"""Trade-id prefixes of importers whose ids are file positions, not broker trade numbers."""
+ID_LESS_PREFIXES = ("CAS:", "OPENING:")
+"""Trade-id prefixes whose ids are positions in a file or form, not broker trade numbers: the
+CAS, and opening holdings (the same lot entered twice is one lot)."""
 
 
 def _number(value: Decimal) -> str:

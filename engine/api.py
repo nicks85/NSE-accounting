@@ -14,7 +14,12 @@ from engine import __version__
 from engine.classify.business_income import BusinessIncome, business_income
 from engine.classify.capital_gains import Bucket, CapitalGainLine, Term, capital_gain_line
 from engine.classify.funds import FundClass, is_fund, isin_of
-from engine.classify.trades import DELIVERY_SUFFIX, MANUAL_PREFIX, classify_trades
+from engine.classify.trades import (
+    DELIVERY_SUFFIX,
+    MANUAL_PREFIX,
+    OPENING_PREFIX,
+    classify_trades,
+)
 from engine.dates import tax_year_bounds, tax_year_of
 from engine.matching.corporate_actions import CorporateAction
 from engine.matching.fifo import Shortfall, match_fifo
@@ -242,6 +247,21 @@ def compute_tax_year(
             f"{len(manual)} purchase(s) entered by hand; check them against contract notes. "
             "Cost and date rules for IPO, bonus, gift, inheritance and ESOP shares are a best "
             "guess (see docs/OPEN_QUESTIONS.md Q-029).", question="Q-029"))
+    opening = [t for t in history if t.trade_id.startswith(OPENING_PREFIX)]
+    both = sorted({t.instrument for t in manual} & {t.instrument for t in opening})
+    if both:
+        warnings.append(Notice(
+            "OPENING_AND_MANUAL",
+            f"{', '.join(both)}: has both a purchase entered for a sale and holdings entered from "
+            "before your first tradebook. If they are the same shares, remove one, or Kosh "
+            "counts them twice.", question="Q-029"))
+    if opening:
+        warnings.append(Notice(
+            "OPENING_HOLDINGS",
+            f"{len(opening)} holding(s) from before your first tradebook were entered by hand; "
+            "check them against contract notes or a demat holding statement. Cost and date "
+            "rules for IPO, bonus, gift, inheritance and ESOP shares are a best guess (see "
+            "docs/OPEN_QUESTIONS.md Q-029).", question="Q-029"))
     warnings.append(SCOPE_NOTE)
 
     return TaxYearReport(

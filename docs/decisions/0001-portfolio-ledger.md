@@ -638,3 +638,26 @@ Five sheets:
   needed no new command or permission.
 - **E2E:** the backup tests run in their own Playwright project after all the others. A
   restore replaces the ledger the parallel tests share.
+
+### Task 7 — opening holdings (2026-10-10, approved)
+
+- **Two ways in, the same rows:** a CSV template (`importers/opening.py`) and a form on the
+  Import screen. Both use ISIN, optional name, quantity, purchase date, price, optional charges
+  and how acquired. Each save or file is one `opening` batch in the import history, so it can
+  be undone.
+- **How lots are treated:** each lot is a buy with an `OPENING:` trade id.
+  - FIFO matches it like any other purchase.
+  - It is never netted as intraday.
+  - Its duplicate key is a content hash, so the same lot entered twice is recognised.
+  - "How acquired" is stored in `trade.how_acquired`.
+  - Reports carry an `OPENING_HOLDINGS` notice (Q-029).
+- **Checks on each row:**
+  - a valid Indian ISIN, including its check digit, since a typed ISIN is the likeliest typo
+  - no future date
+  - positive quantity
+  - price 0 only for bonus shares
+  - a known "how acquired" value
+- **Shares only:** lots go in as listed shares (segment EQUITY), which includes ETFs. Units
+  held with a fund house are pointed to the CAS, which has their full history.
+- **Not done:** the depository CAS quantity cross-check (D5 d) and broker Tax P&L opening lots
+  (task 14).

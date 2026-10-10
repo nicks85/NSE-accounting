@@ -164,3 +164,26 @@ def test_untimed_lookalikes_from_another_source_are_saved_with_a_warning(
         buy("2025-04-02", 10, 100, trade_id="GROWW:NSE:2025-04-02:2")])
     assert outcome.added == 2
     assert [c.new.trade_id for c in outcome.possible_duplicates] == ["GROWWINDIA:NSE:2025-04-02:1"]
+
+
+def test_how_acquired_is_stored_with_the_trade(ledger: Ledger, person: int) -> None:
+    lot = buy("2016-04-01", 10, 100, trade_id="OPENING:INE000A01012:2016-04-01:1")
+    ledger.import_trades(person, Batch(kind="opening"), [lot], how_acquired={lot.trade_id: "gift"})
+    assert ledger._db.execute("SELECT how_acquired FROM trade").fetchone() == ("gift",)
+    assert dedupe_keys([lot])[0].startswith("H|")  # same lot entered twice is one lot
+
+
+def test_a_corrected_opening_lot_is_a_conflict_not_a_duplicate(ledger: Ledger,
+                                                                person: int) -> None:
+    lot = buy("2016-04-01", 10, 100, trade_id="OPENING:INE000A01012:2016-04-01:10:100:1")
+    ledger.import_trades(person, Batch(kind="opening"), [lot],
+                         how_acquired={lot.trade_id: "bought"})
+    same = ledger.import_trades(person, Batch(kind="opening"), [lot],
+                                how_acquired={lot.trade_id: "bought"})
+    assert (same.duplicates, same.conflicts) == (1, ())
+    as_gift = ledger.import_trades(person, Batch(kind="opening"), [lot],
+                                   how_acquired={lot.trade_id: "gift"})
+    with_charges = ledger.import_trades(person, Batch(kind="opening"),
+                                        [replace(lot, charges=d("12"))])
+    assert len(as_gift.conflicts) == 1 and len(with_charges.conflicts) == 1
+    assert len(ledger.trades(person)) == 1

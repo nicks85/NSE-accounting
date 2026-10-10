@@ -266,6 +266,7 @@ def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str,
     classes, names)."""
     broker = params.get("broker")
     password = params.get("password") or None
+    result: Any
     suggested: dict[str, str] = {}
     names: dict[str, str] = {}
     if broker == "cas":
@@ -295,6 +296,15 @@ def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str,
             files, isin_map={str(k): str(v) for k, v in isin_map.items()}, password=password)
         result = angel.result
         names = angel.names
+    elif broker == "opening":
+        from importers.opening import load_opening_csv
+
+        if len(files) != 1:
+            raise RequestError("import one opening-holdings file at a time")
+        name, data = files[0]
+        opening = load_opening_csv(data, name=name, today=date.today())
+        result = _OpeningResult(opening)
+        names = dict(opening.names)
     elif broker == "mapped":
         from importers.mapped import mapped_profile
         from importers.tabular import load_tradebooks
@@ -306,6 +316,45 @@ def _parse(params: JSON, files: list[tuple[str, bytes]]) -> tuple[Any, dict[str,
     else:
         raise RequestError(f"unknown broker {broker!r}")
     return result, suggested, names
+
+
+class _OpeningResult:
+    """Opening holdings in the shape the import methods use for a parsed file."""
+
+    source = "Opening holdings"
+    format_confirmed = True
+    warnings: tuple[str, ...] = ()
+
+    def __init__(self, opening: Any) -> None:
+        self.trades = opening.trades
+        self.how_acquired = opening.how_acquired
+        self.warnings = opening.warnings
+
+
+def m_opening_template(_params: JSON) -> JSON:
+    from importers.opening import template_csv
+
+    return {"name": "kosh-opening-holdings.csv", "csv": template_csv()}
+
+
+def m_ledger_add_opening(params: JSON) -> JSON:
+    """Save holdings entered in the form as one "opening" batch (it can be undone)."""
+    from engine.ledger import Batch
+    from importers.opening import parse_rows
+
+    profile_id = _profile_id(params)
+    rows = params.get("rows")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        raise RequestError("rows must be a list of objects")
+    opening = parse_rows(rows, today=date.today())
+    outcome = _ledger().import_trades(profile_id, Batch("opening", "opening", "Entered by hand"),
+                                      opening.trades, how_acquired=opening.how_acquired)
+    return {"added": outcome.added, "duplicates": outcome.duplicates,
+            "conflicts": [{"new": trade_to_json(c.new), "existing": trade_to_json(c.existing),
+                           "reason": c.reason} for c in outcome.conflicts],
+            "warnings": list(opening.warnings),
+            "names": dict(opening.names) if not outcome.conflicts else {},
+            **_ledger_state(profile_id)}
 
 
 def m_import(params: JSON) -> JSON:
@@ -432,7 +481,7 @@ def m_ledger_import(params: JSON) -> JSON:
 
     profile_id = _profile_id(params)
     ledger = _ledger()
-    kind = "cas" if params.get("broker") == "cas" else "tradebook"
+    kind = {"cas": "cas", "opening": "opening"}.get(str(params.get("broker")), "tradebook")
     broker = str(params.get("key") or params.get("broker") or "")
     files: list[JSON] = []
     suggested: dict[str, str] = {}
@@ -454,7 +503,8 @@ def m_ledger_import(params: JSON) -> JSON:
             continue
         result, file_suggested, file_names = parsed_file
         outcome = ledger.import_trades(
-            profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings)
+            profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings,
+            how_acquired=getattr(result, "how_acquired", None))
         files.append({
             "name": name, "added": outcome.added, "duplicates": outcome.duplicates,
             "already_imported_on": outcome.already_imported_on,
@@ -586,6 +636,8 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "ledger_save_settings": m_ledger_save_settings,
     "ledger_mark_filed": m_ledger_mark_filed,
     "ledger_backup": m_ledger_backup,
+    "opening_template": m_opening_template,
+    "ledger_add_opening": m_ledger_add_opening,
     "ledger_restore": m_ledger_restore,
     "ledger_unmark_filed": m_ledger_unmark_filed,
     "ledger_state": m_ledger_state,
