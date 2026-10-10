@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic Angel One trade history (CSV) in the real export's layout: summary block, then the
 // "TradeBook And Charges" table. Names are invented; the file has no ISIN column.
@@ -17,7 +17,7 @@ test("Angel One import works in one step, by company name, with charges", async 
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Angel One trade history").check();
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "Trades_History.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("Imported 2 new trades from Angel One trade history")).toBeVisible();
 
   await page.getByRole("tab", { name: "Gains" }).click();

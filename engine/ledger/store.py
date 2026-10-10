@@ -11,7 +11,8 @@ import hashlib
 import json
 import sqlite3
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -128,6 +129,25 @@ class Ledger:
     def __init__(self, connection: sqlite3.Connection, path: Path | None = None) -> None:
         self._db = connection
         self._path = path
+        self._rehearsing = False
+
+    @contextmanager
+    def rehearsal(self) -> Iterator[None]:
+        """Run real changes inside one transaction and roll them all back at the end.
+
+        The import preview (brief 0004) saves the files exactly as Save would, in order, so a
+        file sees the files before it in the same request, then undoes everything: the preview
+        can't differ from the save."""
+        self._db.execute("BEGIN IMMEDIATE")
+        self._rehearsing = True
+        try:
+            yield
+        finally:
+            self._rehearsing = False
+            # SQLite may already have rolled back by itself (disk full, I/O error): rolling
+            # back again would raise and hide that error.
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
 
     @classmethod
     def open(cls, path: Path | str) -> Self:
@@ -264,8 +284,8 @@ class Ledger:
                 self._db.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", [
                     ("created_at", _now()), ("created_by_app_version", __version__)])
 
-    def _transaction(self) -> "_Transaction":
-        return _Transaction(self._db)
+    def _transaction(self) -> "_Transaction | _Savepoint":
+        return _Savepoint(self._db) if self._rehearsing else _Transaction(self._db)
 
     # -- profiles -----------------------------------------------------------------------------
 
@@ -351,7 +371,8 @@ class Ledger:
                       account: str | None = None) -> ImportOutcome:
         """Import one file (D3): skip trades already in the ledger, refuse the whole file if a
         trade's key is there with different details, and recognise a file already imported.
-        Nothing is stored unless at least one trade is new."""
+        Nothing is stored unless at least one trade is new. Inside ``rehearsal()`` everything
+        is rolled back afterwards (the import preview)."""
         if batch.kind not in BATCH_KINDS:
             raise LedgerError(f"unknown batch kind {batch.kind!r}")
         self._require_profile(profile_id)
@@ -863,6 +884,22 @@ class Ledger:
         kind = "MF" if code.startswith("INF") else "EQUITY"
         return _rowid(self._db.execute(
             "INSERT INTO instrument (isin, kind) VALUES (?, ?)", (code, kind)))
+
+
+class _Savepoint:
+    """A nested all-or-nothing step inside a rehearsal's transaction."""
+
+    def __init__(self, db: sqlite3.Connection) -> None:
+        self._db = db
+
+    def __enter__(self) -> None:
+        self._db.execute("SAVEPOINT step")
+
+    def __exit__(self, kind: type[BaseException] | None, error: BaseException | None,
+                 trace: TracebackType | None) -> None:
+        if kind:
+            self._db.execute("ROLLBACK TO step")
+        self._db.execute("RELEASE step")
 
 
 class _Transaction:

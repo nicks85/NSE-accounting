@@ -70,3 +70,5 @@ tr.total td { font-weight: 700; }
 .profiles .inline-form { margin: 0; }
 .profiles select { max-width: 260px; }
 table.entry input, table.entry select { width: 100%; box-sizing: border-box; min-width: 80px; }
+.preview-file { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.preview-file h4 { margin: 4px 0; }

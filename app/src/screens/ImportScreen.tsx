@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { fileToBase64, rpc } from "../engine";
+import { inr } from "../report";
 import { Backup } from "./Backup";
 import { OpeningForm, TemplateButton } from "./OpeningHoldings";
 import { ledgerFields, useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
@@ -36,12 +37,22 @@ type FileOutcome = {
   already_imported_on: string | null;
   /** For a file already imported: the account its trades went into. */
   imported_into?: string | null;
+  /** Preview details (brief 0004). Absent for a file already imported. */
+  sha256: string;
+  account?: string | null;
+  trades?: number; buys?: number; sells?: number;
+  date_from?: string | null; date_to?: string | null;
+  charges?: string; stt?: string; stated_charges?: string | null;
+  charges_check?: "matches" | "differs" | "none";
+  by_name?: string[];
+  notes?: string[];
   conflicts: { new: Trade; existing: Trade; reason: "same_id" | "other_source" }[];
   /** Saved, but matching a saved trade from another source (no times to tell them apart). */
   possible_duplicates: number;
 };
 
 type ImportResult = LedgerState & {
+  saved?: boolean;
   files: FileOutcome[];
   source: string | null;
   format_confirmed: boolean;
@@ -57,6 +68,92 @@ const BROKER_LABEL: Record<string, string> = {
 function when(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : at.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+}
+
+async function encode(files: File[]) {
+  return Promise.all(files.map(async (f) => ({ name: f.name, data_base64: await fileToBase64(f) })));
+}
+
+/** A file that saving would store: read cleanly, at least one new trade, no conflicts. */
+const savable = (f: FileOutcome) => !f.already_imported_on && f.conflicts.length === 0 && f.added > 0;
+
+function ChargesCheck({ file }: { file: FileOutcome }) {
+  if (file.charges === undefined) return null;
+  return (
+    <li>
+      Charges {inr(file.charges)} and STT {inr(file.stt ?? "0")}.{" "}
+      {file.charges_check === "matches" && <>That matches the file’s own total of {inr(file.stated_charges!)}.</>}
+      {file.charges_check === "differs" && (
+        <span className="pill pill-warn">The file’s own total is {inr(file.stated_charges!)}: check the file is complete</span>
+      )}
+      {file.charges_check === "none" && <span className="muted">This file has no charges summary to check against.</span>}
+    </li>
+  );
+}
+
+function PreviewFile({ file }: { file: FileOutcome }) {
+  if (file.already_imported_on || file.conflicts.length > 0) {
+    return <div className="preview-file"><h4>{file.name}: won’t be saved</h4><ul><FileLine file={file} /></ul></div>;
+  }
+  return (
+    <div className="preview-file">
+      <h4>{file.name}</h4>
+      <ul>
+        <li>
+          {file.trades} trade{file.trades === 1 ? "" : "s"} ({file.buys} buy{file.buys === 1 ? "" : "s"}, {file.sells} sell{file.sells === 1 ? "" : "s"})
+          {file.date_from && <> from {file.date_from} to {file.date_to}</>}
+          {file.account ? <>, into the demat account {file.account}</> : null}.
+        </li>
+        <li>
+          <strong>{file.added} new</strong>
+          {file.duplicates > 0 && <>, {file.duplicates} already saved and will be skipped</>}.
+          {file.added === 0 && <> Nothing to save from this file.</>}
+        </li>
+        <ChargesCheck file={file} />
+        {(file.by_name?.length ?? 0) > 0 && (
+          <li>
+            {file.by_name!.length} compan{file.by_name!.length === 1 ? "y" : "ies"} without an ISIN, imported by name:{" "}
+            {file.by_name!.map((n) => n.replace(/^NAME:/, "")).join(", ")}.
+          </li>
+        )}
+        {file.possible_duplicates > 0 && (
+          <li className="notice">
+            {file.possible_duplicates} trade(s) match a trade saved from another source on the same day, share, quantity
+            and price. Without trade times Kosh can’t tell whether they are the same trades under another broker name.
+          </li>
+        )}
+      </ul>
+      {(file.notes?.length ?? 0) > 0 && (
+        <details>
+          <summary>{file.notes!.length} note{file.notes!.length === 1 ? "" : "s"} from the importer (rows skipped and other details)</summary>
+          <ul>{file.notes!.map((n, i) => <li key={i}>{n}</li>)}</ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** What saving would do, file by file; nothing is stored until "Save" (brief 0004). */
+function PreviewPanel({ result, busy, onSave, onCancel }: {
+  result: ImportResult; busy: boolean; onSave: () => void; onCancel: () => void;
+}) {
+  const total = result.files.length;
+  const ready = result.files.filter(savable).length;
+  return (
+    <section aria-label="Import preview" className="needs">
+      <h3>Check before saving</h3>
+      <p className="muted">Nothing has been saved yet.</p>
+      {!result.format_confirmed && (
+        <div className="notice">This file format is based on public documentation and isn’t confirmed against real files yet. Check the trades against your broker statement.</div>
+      )}
+      {result.files.map((f, i) => <PreviewFile key={`${i}-${f.name}`} file={f} />)}
+      <button type="button" className="primary" disabled={busy || ready === 0} onClick={onSave}>
+        {ready === 0 ? "Nothing to save" : ready === total ? `Save ${total === 1 ? "this file" : `all ${total} files`}`
+          : `Save ${ready} of ${total} files`}
+      </button>{" "}
+      <button type="button" onClick={onCancel}>Cancel</button>
+    </section>
+  );
 }
 
 function FileLine({ file }: { file: FileOutcome }) {
@@ -210,6 +307,17 @@ export function ImportScreen() {
   // FIFO runs per demat account (brief 0003): one account per broker unless named otherwise.
   const [account, setAccount] = useState<string | null>(null);
   useEffect(() => setAccount(null), [session.profileId]);  // a typed account belongs to one person
+  // The preview keeps the chosen files, not their encoded bytes (up to 100 MB): Save reads them
+  // again and the engine checks they are byte-for-byte the ones previewed (brief 0004 B1).
+  const [preview, setPreview] = useState<{ profileId: number; params: object; files: File[]; result: ImportResult } | null>(null);
+  const [drift, setDrift] = useState(false);
+  // Bumped whenever the inputs change: a preview reply for older inputs is dropped on arrival.
+  const inputs = useRef(0);
+  // A preview belongs to these files, this source and account, this person and this ledger.
+  useEffect(() => {
+    inputs.current += 1;
+    setPreview(null);
+  }, [broker, account, files, session.profileId, brokerName, mapping, password, session.revision, session.batches]);
   const defaultAccount = broker === "mapped" ? brokerName.trim()
     : broker === "opening" ? (session.accounts.length === 1 ? session.accounts[0] : "")
     : (BROKER_LABEL[broker] ?? "");
@@ -219,24 +327,49 @@ export function ImportScreen() {
   const missingIds = broker === "mapped" && !mapping.isin?.trim() && !mapping.symbol?.trim();
   const missingVenue = broker === "mapped" && !mapping.exchange?.trim() && !mapping.segment?.trim();
 
+  /** Step 1 (brief 0004): read the files and show what saving would do; nothing is stored. */
   async function submit(event: FormEvent) {
     event.preventDefault();
     const profileId = session.profileId;
+    const asked = inputs.current;
+    const chosen = files;
     setBusy(true);
-    update({ working: true });
     setError(null);
+    setLast(null);
+    setDrift(false);
     try {
       const params = {
         broker,
         password: password || undefined,
         account: broker === "cas" ? undefined : (account ?? defaultAccount).trim() || undefined,
-        files: await Promise.all(files.map(async (f) => ({ name: f.name, data_base64: await fileToBase64(f) }))),
         ...(broker === "mapped"
           ? { mapping, key: brokerName.toUpperCase().replace(/[^A-Z0-9]/g, "") || "MAPPED", source: `${brokerName} (mapped)` }
           : {}),
       };
       if (profileId === null) throw new Error("your saved data hasn't loaded yet");
-      const result = await rpc<ImportResult>("ledger_import", { ...params, profile_id: profileId });
+      const result = await rpc<ImportResult>("ledger_import", {
+        ...params, files: await encode(chosen), profile_id: profileId, mode: "preview" });
+      if (inputs.current === asked) setPreview({ profileId, params, files: chosen, result });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Step 2: save exactly the bytes that were previewed; the engine checks them (brief 0004 B1). */
+  async function save() {
+    if (!preview) return;
+    const { profileId, params } = preview;
+    setBusy(true);
+    update({ working: true });
+    setError(null);
+    try {
+      const expected = preview.result.files.map((f) => f.sha256);
+      const result = await rpc<ImportResult>("ledger_import", {
+        ...params, files: await encode(preview.files), profile_id: profileId, mode: "save", expected });
+      const count = (r: ImportResult) => r.files.reduce((n, f) => n + f.added, 0);
+      setDrift(count(result) !== count(preview.result));
       // Merge against the latest state, not the one captured before the await, and never into
       // another person's session.
       update((current) => {
@@ -250,6 +383,7 @@ export function ImportScreen() {
         };
       });
       setLast(result);
+      setPreview(null);
       setPassword("");
       setFiles([]);
       setInputKey((k) => k + 1); // so the same file can be chosen again
@@ -270,7 +404,7 @@ export function ImportScreen() {
   return (
     <div>
       <form onSubmit={submit} aria-label="Import a statement">
-        <fieldset>
+        <fieldset disabled={busy}>
           <legend>1. Source</legend>
           {SOURCES.map((s) => (
             <label key={s.id} className="choice">
@@ -281,7 +415,7 @@ export function ImportScreen() {
           <p className="muted">{source.hint}</p>
         </fieldset>
 
-        <fieldset>
+        <fieldset disabled={busy}>
           <legend>2. File{single ? "" : "s"}</legend>
           {broker === "opening" && <p><TemplateButton /></p>}
           <label htmlFor="files">Choose {broker === "cas" ? "the CAS PDF" : broker === "opening" ? "the filled-in template" : "tradebook file(s)"}</label>
@@ -303,7 +437,7 @@ export function ImportScreen() {
         </fieldset>
 
         {broker === "mapped" && (
-          <fieldset>
+          <fieldset disabled={busy}>
             <legend>3. Column names in your file</legend>
             <label htmlFor="broker-name">Broker name</label>
             <input id="broker-name" value={brokerName} onChange={(e) => setBrokerName(e.target.value)} />
@@ -326,7 +460,7 @@ export function ImportScreen() {
         )}
         <button type="submit" className="primary" disabled={busy || session.working || files.length === 0 || (broker === "cas" && !password)
           || missingColumns.length > 0 || missingIds || missingVenue}>
-          {busy ? "Importing…" : "Import files"}
+          {busy ? "Reading…" : "Preview import"}
         </button>
       </form>
 
@@ -338,9 +472,17 @@ export function ImportScreen() {
       )}
       {error && <div className="error" role="alert">Import failed: {error}</div>}
 
+      {preview && preview.profileId === session.profileId && (
+        <PreviewPanel result={preview.result} busy={busy || session.working} onSave={save} onCancel={() => setPreview(null)} />
+      )}
+
       {last && (
         <section aria-label="Last import">
           <h3>Imported {added(last)} new trade{added(last) === 1 ? "" : "s"}{last.source ? ` from ${last.source}` : ""}</h3>
+          {drift && (
+            <div className="notice" role="status">The numbers differ from the preview: something else changed your saved
+              data in between (for example another Kosh window). What was saved is listed here.</div>
+          )}
           <ul>{last.files.map((f, i) => <FileLine key={`${i}-${f.name}`} file={f} />)}</ul>
           {!last.format_confirmed && added(last) > 0 && (
             <div className="notice">This file format is based on public documentation and isn't confirmed against real files yet. Check the trades against your broker statement.</div>

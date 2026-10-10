@@ -20,6 +20,12 @@ class ImportResult:
     warnings: tuple[str, ...]
     format_confirmed: bool
     """False while the column layout is based on secondary sources (see OPEN_QUESTIONS)."""
+    stated_charges: Decimal | None = None
+    """The file's own total of trade charges including STT, when it states one (Angel One's
+    "Total Trade Charges"), for the import preview to compare with the rows (brief 0004)."""
+    row_charges: Decimal | None = None
+    """Charges including STT on every trade row of the file, imported or skipped, the figure
+    that ``stated_charges`` is compared with (a skipped F&O row is still in the file's total)."""
 
 
 def normalise_header(name: str) -> str:

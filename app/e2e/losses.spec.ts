@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 const HEADER = "symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time";
 const csv = [HEADER,
@@ -11,7 +11,7 @@ test("holdings and brought-forward losses", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 4 new trades/)).toBeVisible();
 
   await page.getByRole("tab", { name: "Holdings" }).click();

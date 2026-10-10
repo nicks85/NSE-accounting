@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Phase 4 exit: import → compute → export, in one flow, through the real engine.
 // Synthetic Zerodha tradebook (fake ISINs): a pre-2018 holding, a short-term trade and F&O.
@@ -18,7 +18,7 @@ test("import → compute → export", async ({ page }, testInfo) => {
 
   // Import
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("6 trades — 4 shares, 2 F&O")).toBeVisible();
 
   // Compute: 2018 price → LTCG 7,00,000 - 1,25,000 = 5,75,000 x 12.5% = 71,875;

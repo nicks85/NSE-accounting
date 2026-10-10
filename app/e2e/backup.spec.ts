@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 test.describe.configure({ mode: "serial" });
 
@@ -12,7 +12,7 @@ test("back up, lose the trades, restore them", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/2 trades — 2 shares/)).toBeVisible();
 
   const download = page.waitForEvent("download");
@@ -35,7 +35,7 @@ test("a file that isn't a backup is refused and nothing changes", async ({ page 
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/2 trades — 2 shares/)).toBeVisible();
   await page.getByLabel(/Restore from a backup/).setInputFiles({ name: "notes.kosh", mimeType: "text/plain", buffer: Buffer.from("hello") });
   await page.getByRole("button", { name: "Replace with this backup" }).click();

@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic, check-digit-valid fake ISIN. The tradebook only has the sale (Jun 2025, 100 @300);
 // the 100 shares were bought in 2016 @100, before the earliest tradebook.
@@ -10,7 +10,7 @@ test("holdings entered by hand resolve a sale from before the first tradebook", 
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 1 new trade/)).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
   await expect(page.locator("tr.total")).toContainText("Incomplete: 1 sale(s)");
@@ -55,11 +55,11 @@ test("the filled-in template imports, and a typo in an ISIN is refused", async (
   const csv = (row: string) => ({ name: "opening.csv", mimeType: "text/csv",
     buffer: Buffer.from(`isin,name,quantity,buy_date,price,charges,how_acquired\n${row}\n`) });
   await page.getByLabel("Choose the filled-in template").setInputFiles(csv("INE000A01011,,10,2016-04-01,100,,bought"));
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByRole("alert")).toContainText("isn't a valid Indian ISIN");
 
   await page.getByLabel("Choose the filled-in template").setInputFiles(csv("INE000A01012,,10,2016-04-01,100,,gift"));
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("Imported 1 new trade from Opening holdings")).toBeVisible();
   await expect(page.getByText(/1 trades — 1 shares/)).toBeVisible();
 });

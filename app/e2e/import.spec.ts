@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic Zerodha tradebook (fake ISIN); layout per importers/zerodha.py (unconfirmed, Q-015).
 const HEADER = "symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time";
@@ -15,19 +15,19 @@ test("import into the saved ledger: duplicates, reload and undo", async ({ page 
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("Imported 2 new trades from Zerodha tradebook (CSV)")).toBeVisible();
   await expect(page.getByText(/isn't confirmed against real files/)).toBeVisible();
   await expect(page.getByText(/2 trades — 2 shares/)).toBeVisible();
 
   // The same file again is recognised without reading it.
   await page.getByLabel(/Choose tradebook/).setInputFiles(tradebook);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/tradebook.csv: already imported on/)).toBeVisible();
 
   // An overlapping later file adds only what is new.
   await page.getByLabel(/Choose tradebook/).setInputFiles(overlapping);
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("tradebook-2.csv: 1 new trade, 2 already in your ledger and skipped.")).toBeVisible();
   const history = page.getByRole("table", { name: "Import history" });
   await expect(history.getByRole("row")).toHaveCount(3);

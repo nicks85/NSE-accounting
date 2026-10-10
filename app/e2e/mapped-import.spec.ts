@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic file with user-defined headers (Kosh has no built-in Groww layout).
 const csv = ["Date,Type,Qty,Price,Order Id,ISIN,Exchange",
@@ -10,14 +10,14 @@ test("mapped import needs the required columns, then imports through the engine"
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Groww or other/).check();
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "groww.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await expect(page.getByRole("button", { name: "Import files" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Preview import" })).toBeDisabled();
   await expect(page.getByText(/Still needed/)).toBeVisible();
   for (const [label, value] of [["Trade date *", "Date"], ["Buy / sell *", "Type"], ["Quantity *", "Qty"],
                                 ["Price *", "Price"], ["Trade / order number *", "Order Id"],
                                 ["ISIN (shares)", "ISIN"], ["Exchange", "Exchange"]]) {
     await page.getByLabel(label, { exact: true }).fill(value);
   }
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText("Imported 2 new trades from Groww (mapped)")).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
   // STCG = 10 x (110 - 100.50) = 95 → ₹95.00 at 20%: tax 19 → rounded to ₹20.

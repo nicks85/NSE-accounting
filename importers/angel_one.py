@@ -216,7 +216,9 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
         warnings.append(f"{name}: the file has no trade times; trades on the same day are "
                         "matched in file order")
     warnings.extend(_check_charges(summary, charges_in_rows, name))
-    return _Parsed(ImportResult(SOURCE, tuple(trades), tuple(warnings), True), names)
+    return _Parsed(ImportResult(SOURCE, tuple(trades), tuple(warnings), True,
+                                _summary_amount(summary, "total_trade_charges"),
+                                charges_in_rows), names)
 
 
 def _summary_amount(summary: dict[str, str], label: str) -> Decimal | None:
@@ -298,7 +300,8 @@ def load_angel_one_tradebooks(files: Iterable[tuple[str, bytes]], *,
         parsed = _parse_rows(rows, checked, name)
         names.update({k: v for k, v in parsed.names.items() if k not in names})
         parts.append(ImportResult(parsed.result.source, parsed.result.trades,
-                                  (*parsed.result.warnings, *notes), True))
+                                  (*parsed.result.warnings, *notes), True,
+                                  parsed.result.stated_charges, parsed.result.row_charges))
     merged = merge_results(parts, SOURCE, True)
     by_name = sorted(v for k, v in names.items() if k.startswith(NAME_PREFIX))
     extra: list[str] = []
@@ -312,4 +315,6 @@ def load_angel_one_tradebooks(files: Iterable[tuple[str, bytes]], *,
     if not extra:
         return AngelOneImport(merged, names)
     return AngelOneImport(ImportResult(merged.source, merged.trades,
-                                       (*merged.warnings, *extra), True), names)
+                                       (*merged.warnings, *extra), True, merged.stated_charges,
+                                       merged.row_charges),
+                          names)

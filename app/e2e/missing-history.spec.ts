@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures";
+import { expect, importFiles, test } from "./fixtures";
 
 // Synthetic Zerodha tradebook (fake ISINs). SYNTHA: 100 sold in Jun 2025 with no purchase in the file.
 // SYNTHB: bought 10 @50 and sold @60 in FY 2025-26 → STCG 100.
@@ -12,7 +12,7 @@ test("missing purchase history: total and export withheld until the purchase is 
   await page.goto("/");
   await expect(page.getByText(/runs on this computer/)).toBeVisible({ timeout: 30_000 });
   await page.getByLabel(/Choose tradebook/).setInputFiles({ name: "tb.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await page.getByRole("button", { name: "Import files" }).click();
+  await importFiles(page);
   await expect(page.getByText(/Imported 3 new trades/)).toBeVisible();
   await page.getByRole("tab", { name: "Gains" }).click();
 

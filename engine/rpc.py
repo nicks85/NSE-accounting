@@ -17,6 +17,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -509,11 +510,54 @@ def m_ledger_state(params: JSON) -> JSON:
     return _ledger_state(_profile_id(params))
 
 
+def _file_summary(name: str, sha: str, result: Any, account: str | None) -> JSON:
+    """What the preview shows about one file's trades (brief 0004 C)."""
+    trades = result.trades
+    dates = [t.trade_date for t in trades]
+    charges = sum((t.charges for t in trades), Decimal(0))
+    stt = sum((t.stt for t in trades), Decimal(0))
+    stated = getattr(result, "stated_charges", None)
+    # Compare like with like: the importer's sum over every trade row, skipped ones included.
+    rows = getattr(result, "row_charges", None)
+    in_rows = rows if rows is not None else charges + stt
+    check = ("none" if stated is None
+             else "matches" if abs(stated - in_rows) <= CHARGES_TOLERANCE else "differs")
+    return {
+        "name": name, "sha256": sha, "source": result.source,
+        "format_confirmed": result.format_confirmed, "account": account,
+        "trades": len(trades), "buys": sum(t.side is Side.BUY for t in trades),
+        "sells": sum(t.side is Side.SELL for t in trades),
+        "date_from": min(dates).isoformat() if dates else None,
+        "date_to": max(dates).isoformat() if dates else None,
+        "charges": _s(charges), "stt": _s(stt),
+        "stated_charges": _s(stated) if stated is not None else None, "charges_check": check,
+        "by_name": sorted({t.instrument for t in trades if t.instrument.startswith("NAME:")}),
+        "notes": list(result.warnings),
+    }
+
+
+CHARGES_TOLERANCE = Decimal(1)
+"""A file's own charges summary is rounded (Angel One: STT to whole rupees): ₹1 of slack."""
+
+
 def m_ledger_import(params: JSON) -> JSON:
     """Import each file into the ledger as its own batch (so each can be undone). A file
-    already imported is recognised by its SHA-256 before it is read."""
+    already imported is recognised by its SHA-256 before it is read.
+
+    ``mode: "preview"`` saves the files exactly as Save would, in order, then rolls it all
+    back, so the preview can't differ from the save. ``mode: "save"`` (the default) saves;
+    with ``expected`` (the preview's SHA-256 of each file, in order) it refuses if the files
+    aren't byte-for-byte the ones previewed (brief 0004 B1)."""
     from engine.ledger import Batch
 
+    mode = str(params.get("mode") or "save")
+    if mode not in {"preview", "save"}:
+        raise RequestError("mode must be preview or save")
+    dry_run = mode == "preview"
+    expected = params.get("expected")
+    if expected is not None and not (isinstance(expected, list)
+                                     and all(isinstance(x, str) for x in expected)):
+        raise RequestError("expected must list each file's SHA-256, in order")
     profile_id = _profile_id(params)
     ledger = _ledger()
     kind = {"cas": "cas", "opening": "opening"}.get(str(params.get("broker")), "tradebook")
@@ -530,36 +574,47 @@ def m_ledger_import(params: JSON) -> JSON:
     confirmed = True
     # Read every file before saving any, so a bad second file doesn't leave the first saved.
     parsed: list[tuple[str, str, str | None, Any]] = []
-    for name, data in _files(params):
+    loaded = _files(params)
+    if expected is not None:
+        given = [hashlib.sha256(data).hexdigest() for _, data in loaded]
+        if given != expected:
+            raise RequestError("the files changed since the preview; preview them again "
+                               "before saving")
+    for name, data in loaded:
         sha = hashlib.sha256(data).hexdigest()
         when = ledger.imported_on(profile_id, sha)
         parsed.append((name, sha, when, None if when else _parse(params, [(name, data)])))
-    for name, sha, when, parsed_file in parsed:
-        if when:
-            files.append({"name": name, "added": 0, "duplicates": 0,
-                          "already_imported_on": when, "conflicts": [],
-                          "possible_duplicates": 0,
-                          "imported_into": ledger.imported_into(profile_id, sha)})
-            continue
-        result, file_suggested, file_names = parsed_file
-        outcome = ledger.import_trades(
-            profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings,
-            how_acquired=getattr(result, "how_acquired", None), account=account)
-        files.append({
-            "name": name, "added": outcome.added, "duplicates": outcome.duplicates,
-            "already_imported_on": outcome.already_imported_on,
-            "conflicts": [{"new": trade_to_json(c.new), "existing": trade_to_json(c.existing),
-                           "reason": c.reason} for c in outcome.conflicts],
-            "possible_duplicates": len(outcome.possible_duplicates)})
-        if not outcome.conflicts:
-            suggested.update(file_suggested)
-            names.update(file_names)
-            warnings.extend(result.warnings)
-        sources.append(result.source)
-        confirmed = confirmed and result.format_confirmed
+    with ledger.rehearsal() if dry_run else nullcontext():
+        for name, sha, when, parsed_file in parsed:
+            if when:
+                files.append({"name": name, "sha256": sha, "added": 0, "duplicates": 0,
+                              "already_imported_on": when, "conflicts": [],
+                              "possible_duplicates": 0,
+                              "imported_into": ledger.imported_into(profile_id, sha)})
+                continue
+            result, file_suggested, file_names = parsed_file
+            outcome = ledger.import_trades(
+                profile_id, Batch(kind, broker, name, sha), result.trades, warnings=result.warnings,
+                how_acquired=getattr(result, "how_acquired", None), account=account)
+            files.append({
+                **_file_summary(name, sha, result, account),
+                "added": outcome.added, "duplicates": outcome.duplicates,
+                # A file identical to an earlier one in this request shows as already imported.
+                "imported_into": (ledger.imported_into(profile_id, sha)
+                                  if outcome.already_imported_on else None),
+                "already_imported_on": outcome.already_imported_on,
+                "conflicts": [{"new": trade_to_json(c.new), "existing": trade_to_json(c.existing),
+                               "reason": c.reason} for c in outcome.conflicts],
+                "possible_duplicates": len(outcome.possible_duplicates)})
+            if not outcome.conflicts:
+                suggested.update(file_suggested)
+                names.update(file_names)
+                warnings.extend(result.warnings)
+            sources.append(result.source)
+            confirmed = confirmed and result.format_confirmed
     return {"files": files, "source": sources[0] if sources else None,
             "format_confirmed": confirmed, "warnings": warnings,
-            "suggested_classes": suggested, "scheme_names": names,
+            "suggested_classes": suggested, "scheme_names": names, "saved": not dry_run,
             **_ledger_state(profile_id)}
 
 
