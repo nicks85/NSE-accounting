@@ -57,7 +57,7 @@ fails if one is committed.
 
 | Option | For | Against |
 |---|---|---|
-| **A. Trades are the source of truth. Lots and gains are rebuilt by replaying FIFO, with a cached year-end snapshot.** | Undo of an import is just "delete that batch and replay". Importing an older file later corrects every year automatically. There is one matcher, the one already tested, so matching can't drift between years. | A replay costs time. Expected to be milliseconds for tens of thousands of trades (to be measured in task 1). |
+| **A. Trades are the source of truth. Lots and gains are rebuilt by replaying FIFO, with a cached year-end snapshot.** | Undo of an import is just "delete that batch and replay". Importing an older file later corrects every year automatically. There is one matcher, the one already tested, so matching can't drift between years. | A replay costs time. Expected to be milliseconds for tens of thousands of trades; measured at about 1.3 s for 20,000 trades over three years (see Implementation notes). |
 | B. Mutable open-lots table carried forward each year | Close to how people think about it | Undo and late imports need complex rollback. Two sources of truth. |
 
 **Recommendation: A.** "Open lots carry forward" becomes a view: the lots still open at 31
@@ -484,3 +484,26 @@ Five sheets:
    - Buyback sales, reported separately from FY 2025-26.
 
    These go into Q-033 and Q-034.
+
+## Implementation notes
+
+### Task 1 — ledger store (2026-10-10, approved)
+
+- **Code:** `engine/ledger/` (`store.py`, `migrations.py`, `paths.py`). Standard-library
+  `sqlite3` only, with foreign keys on. Every write is one transaction.
+- **Migrations are Python strings, not `.sql` files**, so the bundled engine needs no extra
+  data files. A file whose schema is newer than the app is refused unchanged. A SQLite file
+  that isn't a Kosh ledger is refused too.
+- **Two schema changes from the sketch above:**
+  - `trade.source_id` keeps the engine's trade id, so a replayed trade is identical to the
+    imported one, and exclusions and hand-entered purchases can refer to it.
+  - `instrument.isin` may hold a `NAME:` placeholder until the ISIN is mapped (D7).
+- **Charges** are stored as one `OTHER` row plus `STT` until the breakdown lands (task 10).
+- **Data folder:** the engine works out the Tauri app-data folder itself. `KOSH_DATA_DIR`
+  overrides it for tests and E2E. The desktop shell doesn't need to pass a path yet.
+- **Replay time, measured:** 20,000 trades over 2019–2026, computing three tax years, takes
+  **about 1.3 s** on an Apple-silicon laptop. That's slower than the "milliseconds" guessed in
+  D2, because each year replays the full history. It's acceptable for now. Year snapshots
+  (task 4) or a single shared replay across years would cut it if needed.
+- `*.kosh` (backups) and `*.sqlite-*` (SQLite side files) are git-ignored. A test fails if a
+  ledger or backup file is ever committed.
