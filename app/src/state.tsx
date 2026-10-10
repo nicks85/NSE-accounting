@@ -17,6 +17,8 @@ export type Trade = {
   account?: string | null;
   /** For a lot moved in from another of the person's accounts: when it arrived. */
   entered_on?: string | null;
+  /** The charges (except STT) by type, when the file gives them (brief 0005). */
+  charge_parts?: Record<string, string>;
 };
 
 /** Shares moved between two of the person's own demat accounts (brief 0003 C). */
