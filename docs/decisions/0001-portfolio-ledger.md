@@ -601,3 +601,40 @@ Five sheets:
     9, nothing is blocked.
 - **Year snapshots as a cache** (D2) aren't used: replay takes about 1.3 s for 20,000
   trades, so caching can wait until it's needed.
+
+### Task 5 — backup and restore (2026-10-10, approved)
+
+- **Backup:**
+  - `VACUUM INTO` takes a consistent copy of the whole ledger: every person's trades, imports
+    and settings.
+  - The app saves it as `kosh-backup-YYYY-MM-DD.kosh` through the existing save path: the
+    native Save dialog on desktop, a download in a browser.
+  - It isn't encrypted (answer 4), and the screen says so.
+- **Restore, checked before anything is touched:**
+  - the SQLite header (an empty file would otherwise open as a new, blank ledger and wipe
+    everything)
+  - `PRAGMA integrity_check`
+  - a Kosh schema version that isn't newer than the app
+  - an upgrade to the current schema if the backup is older
+  - **Exactly this app's tables and indexes, and nothing else.** The upgraded backup's
+    objects must match a ledger built fresh by the migrations, so a doctored file can't
+    bring triggers or views that act later. Every connection also runs with
+    `trusted_schema = OFF`.
+- **Copying the backup in:**
+  - SQLite's backup API copies it into the open ledger, under the ledger's own lock. No file
+    is swapped, so a failure part-way, another Kosh window, a hot journal or Windows file
+    locking can't leave a half-restored ledger.
+  - The data from before is first copied to `kosh.sqlite.before-restore-<UTC time>`. This copy
+    is never overwritten, so restoring the wrong file and then the right one still keeps the
+    original.
+  - The backup is also refused if any row points at a record that isn't there
+    (`PRAGMA foreign_key_check`).
+  - **Accepted risk:** SQLite waits while another Kosh window holds a write lock. Windows only
+    hold it for one save. A save from another window that lands between the two copies
+    (less than a second) is in neither.
+  - **Confirmation:** restoring takes two clicks, and the screen warns that it replaces every
+    person's data. While it runs, imports, undo and switching person are locked.
+- **Byte transfer:** the file goes through the engine RPC as base64, so the Tauri shell
+  needed no new command or permission.
+- **E2E:** the backup tests run in their own Playwright project after all the others. A
+  restore replaces the ledger the parallel tests share.

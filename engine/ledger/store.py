@@ -10,6 +10,7 @@ Uses only the standard library ``sqlite3``; nothing here opens a network connect
 import hashlib
 import json
 import sqlite3
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -124,8 +125,9 @@ class ImportOutcome:
 class Ledger:
     """An open ledger file. Use ``Ledger.open(path)``, ideally as a context manager."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, path: Path | None = None) -> None:
         self._db = connection
+        self._path = path
 
     @classmethod
     def open(cls, path: Path | str) -> Self:
@@ -140,7 +142,9 @@ class Ledger:
             raise LedgerError(f"cannot open {path}: {error}") from None
         try:
             db.execute("PRAGMA foreign_keys = ON")
-            ledger = cls(db)
+            # Functions in a file's own triggers or views can't run (defence for restores).
+            db.execute("PRAGMA trusted_schema = OFF")
+            ledger = cls(db, path)
             ledger._migrate()
         except sqlite3.OperationalError as error:
             db.close()
@@ -166,6 +170,64 @@ class Ledger:
     def __exit__(self, kind: type[BaseException] | None, error: BaseException | None,
                  trace: TracebackType | None) -> None:
         self.close()
+
+    # -- backup and restore (task 5) ---------------------------------------------------------
+
+    def backup(self) -> bytes:
+        """A consistent copy of the whole ledger (every person), as one SQLite file.
+
+        Uses ``VACUUM INTO``, which copies a snapshot even while the file is in use. The copy
+        is not encrypted (answer 4 in brief 0001)."""
+        with tempfile.TemporaryDirectory(prefix="kosh-backup-") as folder:
+            target = Path(folder) / "backup.kosh"
+            self._db.execute("VACUUM INTO ?", (str(target),))
+            return target.read_bytes()
+
+    def restore(self, data: bytes) -> Path:
+        """Replace this ledger's contents with the backup ``data``; returns where the data
+        from before the restore was kept (``kosh.sqlite.before-restore-<time>``, never
+        overwritten, so a second restore can't lose the original).
+
+        Nothing is touched until the backup passes every check: the SQLite header and
+        integrity, a Kosh schema no newer than this app (upgraded if older), and exactly the
+        tables, indexes and nothing else that this app's schema has, so a doctored file can't
+        bring triggers or views that act later. The backup is then copied in with SQLite's
+        backup API under the ledger's own lock: no file is swapped, so a failure part-way,
+        another Kosh window or Windows file locking can't leave a half-restored ledger."""
+        if self._path is None:
+            raise LedgerError("this ledger has no file to restore into")
+        current = self._path
+        incoming = current.with_name(current.name + ".restoring")
+        incoming.write_bytes(data)
+        try:
+            _check_integrity(incoming)
+            with Ledger.open(incoming) as checked:  # refuses foreign or newer, upgrades older
+                if checked._schema() != _expected_schema():
+                    raise LedgerError("the backup's database structure isn't Kosh's own (it has "
+                                      "extra or changed tables, views or triggers)")
+                before = _unused(current.with_name(
+                    f"{current.name}.before-restore-{datetime.now(UTC):%Y%m%d-%H%M%S}"))
+                try:
+                    keep = sqlite3.connect(before)
+                    try:
+                        _copy(self._db, keep)  # a consistent copy of the current data
+                    finally:
+                        keep.close()
+                    _copy(checked._db, self._db)  # all or nothing, under the ledger's lock
+                except sqlite3.OperationalError as error:
+                    if "locked" in str(error) or "busy" in str(error):
+                        raise LedgerError("the ledger is busy in another Kosh window; close it "
+                                          "and try again") from None
+                    raise LedgerError(f"the restore failed: {error}") from None
+        finally:
+            incoming.unlink(missing_ok=True)
+        return before
+
+    def _schema(self) -> set[tuple[str, str, str, str]]:
+        """Every table, index, view and trigger, with its SQL (SQLite's own objects aside)."""
+        return {(str(t), str(n), str(tbl), str(sql)) for t, n, tbl, sql in self._db.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master"
+            " WHERE name NOT LIKE 'sqlite_%'")}
 
     # -- schema -------------------------------------------------------------------------------
 
@@ -637,6 +699,64 @@ class _Transaction:
     def __exit__(self, kind: type[BaseException] | None, error: BaseException | None,
                  trace: TracebackType | None) -> None:
         self._db.execute("ROLLBACK" if kind else "COMMIT")
+
+
+def _copy(source: sqlite3.Connection, target: sqlite3.Connection) -> None:
+    """SQLite's online backup: a consistent copy of ``source`` into ``target`` in one step.
+    SQLite waits while another connection holds a write lock; Kosh windows hold it only
+    for the length of one save."""
+    source.backup(target)
+
+
+def _expected_schema() -> set[tuple[str, str, str, str]]:
+    """The schema a ledger made by this app has, built fresh in memory by the migrations."""
+    fresh = Ledger(sqlite3.connect(":memory:", isolation_level=None))
+    try:
+        fresh._migrate()
+        return fresh._schema()
+    finally:
+        fresh.close()
+
+
+def _unused(path: Path) -> Path:
+    """``path``, or with ``-2``, ``-3``… added if a file already has that name."""
+    candidate, n = path, 1
+    while candidate.exists():
+        n += 1
+        candidate = path.with_name(f"{path.name}-{n}")
+    return candidate
+
+
+def _check_integrity(path: Path) -> None:
+    """Refuse a damaged, empty or non-Kosh file before it can replace the ledger. An empty
+    file would otherwise open as a new, blank ledger and wipe everything."""
+    with path.open("rb") as file:
+        if file.read(16) != b"SQLite format 3\x00":
+            raise LedgerError("the backup is not a Kosh ledger (not an SQLite file)")
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            result = db.execute("PRAGMA integrity_check").fetchall()
+            # integrity_check doesn't look at foreign keys: rows pointing at a person, import
+            # or instrument that isn't there would otherwise vanish silently after a restore.
+            broken_links = db.execute("PRAGMA foreign_key_check").fetchall()
+            has_version = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone()
+            if has_version:
+                has_version = db.execute(
+                    "SELECT 1 FROM meta WHERE key = 'schema_version'").fetchone()
+        finally:
+            db.close()
+    except sqlite3.DatabaseError as error:
+        raise LedgerError(f"the backup is not a Kosh ledger: {error}") from None
+    if result != [("ok",)]:
+        raise LedgerError(  # pragma: no cover - SQLite raises on most damage first
+            "the backup is damaged (SQLite integrity check failed)")
+    if not has_version:
+        raise LedgerError("the backup has no Kosh schema version")
+    if broken_links:
+        raise LedgerError(f"the backup is damaged: {len(broken_links)} row(s) point at records "
+                          "that aren't there")
 
 
 def _statements(sql: str) -> list[str]:

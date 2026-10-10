@@ -501,6 +501,25 @@ def _filing(profile_id: int, year: int, report: JSON) -> JSON | None:
             "engine_version": filed.engine_version, "changes": changes(filed.report, report)}
 
 
+def m_ledger_backup(_params: JSON) -> JSON:
+    """The whole ledger as one file, for the user to save somewhere safe (task 5)."""
+    from datetime import date as day
+
+    data = _ledger().backup()
+    return {"name": f"kosh-backup-{day.today().isoformat()}.kosh",
+            "data_base64": base64.b64encode(data).decode()}
+
+
+def m_ledger_restore(params: JSON) -> JSON:
+    """Replace the ledger with a backup; the current file is kept as ``…before-restore``."""
+    encoded = params.get("data_base64")
+    if not isinstance(encoded, str) or not encoded:
+        raise RequestError("data_base64 must be the backup file as base64 text")
+    [(_, data)] = _files({"files": [{"name": "backup", "data_base64": encoded}]})
+    before = _ledger().restore(data)
+    return {"before": str(before), "profiles": _profiles()}
+
+
 def m_ledger_mark_filed(params: JSON) -> JSON:
     """Mark the year as filed, keeping its figures as computed from these inputs."""
     from engine.ledger.filing import changes
@@ -566,6 +585,8 @@ METHODS: dict[str, Callable[[JSON], JSON]] = {
     "ledger_profiles": m_ledger_profiles,
     "ledger_save_settings": m_ledger_save_settings,
     "ledger_mark_filed": m_ledger_mark_filed,
+    "ledger_backup": m_ledger_backup,
+    "ledger_restore": m_ledger_restore,
     "ledger_unmark_filed": m_ledger_unmark_filed,
     "ledger_state": m_ledger_state,
     "ledger_import": m_ledger_import,
