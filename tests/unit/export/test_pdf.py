@@ -125,3 +125,41 @@ def test_long_reports_paginate_with_carried_losses() -> None:
     pdf = render_summary(compute_tax_year(2025, trades))
     assert len(pdfium.PdfDocument(pdf)) > 3
     assert "carried forward" in _text(pdf)
+
+
+def test_charges_by_type_table() -> None:
+    """Brief 0005: the year's charges by type, and which files carry none."""
+    from dataclasses import replace
+
+    from engine.api import charges_by_type
+
+    trades = [replace(buy("2025-04-10", 10, 100, trade_id="ANGELONE:1"), charges=d("23.6"),
+                      charge_parts=(("BROKERAGE", d(20)), ("GST", d("3.6")))),
+              sell("2025-12-20", 10, 130, trade_id="ZERODHA:NSE:9")]
+    report = compute_tax_year(2025, trades)
+    text = _text(render_summary(report, charges=charges_by_type(trades, 2025)))
+    assert "Charges by type on this year's trades" in text
+    assert "Brokerage" in text and inr(d(20)) in text and inr(d("3.6")) in text
+    assert "1 trade(s) from ZERODHA files have no charges in the file" in text
+    assert "Charges by type" not in _text(render_summary(report))
+
+
+def test_charges_table_totals_and_a_year_with_only_uncharged_files() -> None:
+    from dataclasses import replace
+
+    from engine.api import charges_by_type
+
+    trades = [replace(buy("2025-04-10", 10, 100, trade_id="ANGELONE:1"), charges=d(3),
+                      charge_parts=(("BROKERAGE", d(2)), ("GST", d(1)))),
+              replace(sell("2025-12-20", 10, 130, trade_id="ANGELONE:2"), charges=d(4),
+                      charge_parts=(("BROKERAGE", d(4)),))]
+    text = _text(render_summary(compute_tax_year(2025, trades),
+                                charges=charges_by_type(trades, 2025)))
+    assert f"Total {inr(d(3))} {inr(d(4))}" in text
+    assert "still to be confirmed (Q-027)" in text
+    plain = [buy("2025-04-10", 10, 100, trade_id="ZERODHA:1"),
+             sell("2025-12-20", 10, 130, trade_id="ZERODHA:2")]
+    only = _text(render_summary(compute_tax_year(2025, plain),
+                                charges=charges_by_type(plain, 2025)))
+    assert "2 trade(s) from ZERODHA files have no charges" in only
+    assert "On purchases" not in only  # no empty table

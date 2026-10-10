@@ -52,6 +52,9 @@ def test_round_trip_to_tax_with_charges() -> None:
     assert (sell.side, sell.price, sell.charges, sell.stt) == (
         Side.SELL, Decimal(1200), Decimal("23.6"), Decimal(120))
     assert buy.trade_id == "ANGELONE:NSE:2025-05-02:11"
+    assert sum((a for _, a in buy.charge_parts), Decimal(0)) == buy.charges  # brief 0005
+    assert {k for k, _ in buy.charge_parts} <= {"BROKERAGE", "GST", "SEBI", "EXCHANGE", "STAMP",
+                                                 "OTHER", "IPFT"}
     assert buy.instrument == SYNTH_A and buy.segment is Segment.EQUITY
     assert imported.names == {SYNTH_A: ALPHA}
     report = compute_tax_year(2025, result.trades)

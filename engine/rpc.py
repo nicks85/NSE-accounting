@@ -105,6 +105,8 @@ def trade_from_json(data: JSON) -> Trade:
             segment=Segment(data.get("segment", Segment.EQUITY.value)),
             executed_at=datetime.fromisoformat(executed) if executed else None,
             account=_text_or_none(data.get("account")),
+            charge_parts=tuple((str(k), _dec(v, f"charge {k}"))
+                               for k, v in (data.get("charge_parts") or {}).items()),
             entered_on=_date(data["entered_on"], "entered_on") if data.get("entered_on") else None,
         )
     except KeyError as missing:
@@ -174,6 +176,7 @@ def trade_to_json(trade: Trade) -> JSON:
         "executed_at": trade.executed_at.isoformat() if trade.executed_at else None,
         "account": trade.account,
         "entered_on": trade.entered_on.isoformat() if trade.entered_on else None,
+        "charge_parts": {kind: _s(amount) for kind, amount in trade.charge_parts},
     }
 
 
@@ -243,6 +246,7 @@ def report_to_json(report: TaxYearReport) -> JSON:
             "bucket": line.bucket.label,
             "manual": line.manual,
             "account": line.disposal.account,
+            "split_factor": _s(line.disposal.split_factor),
             "open_trade_id": line.disposal.open_trade_id,
             "close_trade_id": line.disposal.close_trade_id,
             "citations": [citation_to_json(c, report) for c in line.citations],
@@ -777,9 +781,12 @@ def m_export_itr(params: JSON) -> JSON:
 
 
 def m_export_pdf(params: JSON) -> JSON:
+    from engine.api import charges_by_type
     from engine.export.pdf import render_summary
 
-    pdf = render_summary(_report(params), names=params.get("names") or {})
+    year, inputs = _compute_inputs(params)
+    pdf = render_summary(_report(params), names=params.get("names") or {},
+                         charges=charges_by_type(inputs["trades"], year))
     return {"pdf_base64": base64.b64encode(pdf).decode("ascii")}
 
 

@@ -39,6 +39,8 @@ def test_maps_purchases_redemptions_stamp_duty_and_stt() -> None:
     assert trades[0].segment is Segment.MUTUAL_FUND
     assert (trades[0].charges, trades[1].charges, trades[2].stt) == (
         Decimal(5), Decimal("2.75"), Decimal("1.44"))
+    assert trades[0].charge_parts == (("STAMP", Decimal(5)),)  # brief 0005
+    assert trades[2].charge_parts == ()
     assert result.suggested_classes == {EQ: FundClass.EQUITY_ORIENTED}
     assert result.scheme_names[EQ].startswith("Synthetic Flexi Cap")
     assert not result.result.format_confirmed

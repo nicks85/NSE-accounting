@@ -194,3 +194,68 @@ describe("GainsScreen missing purchase history", () => {
     expect(JSON.parse(screen.getByTestId("state").textContent!).excluded).toEqual(["S1"]);
   });
 });
+
+describe("Charges by type in why? (brief 0005)", () => {
+  const base = { trade_date: "2015-01-01", instrument: "INE000A01011", side: "BUY", quantity: "1000", price: "500",
+    stt: "100", segment: "EQUITY", executed_at: null };
+  const BUY = { ...base, trade_id: "B", charges: "38.60", charge_parts: { BROKERAGE: "20", GST: "3.60", STAMP: "15" } };
+  const SELL = { ...base, trade_id: "S", side: "SELL", trade_date: "2025-06-01", quantity: "2500", charges: "12", stt: "0" };
+
+  it("shows each whole trade's charges by type, and how much of it the line uses", async () => {
+    mockEngine(report());
+    await renderWith({ trades: [BUY, SELL] as never });
+    const gains = await screen.findByLabelText("Capital gains");
+    fireEvent.click(within(gains).getByRole("button", { name: "Why?" }));
+    const charges = within(gains).getByRole("list", { name: "Charges" });
+    expect(charges.textContent).toMatch(/Charges on the purchase \(1000 on 2015-01-01\): brokerage ₹20.00, GST ₹3.60, stamp duty ₹15.00; STT ₹100.00\./);
+    expect(charges.textContent).toMatch(/Charges on the sale \(2500 on 2025-06-01\): ₹12.00 \(not broken down by type\)\. 1000 of those 2500 are in this line\./);
+  });
+
+  it("says when a file has no charges, and skips trades it can't find", async () => {
+    mockEngine(report());
+    await renderWith({ trades: [{ ...BUY, charges: "0", stt: "0", charge_parts: {} }] as never });
+    const gains = await screen.findByLabelText("Capital gains");
+    fireEvent.click(within(gains).getByRole("button", { name: "Why?" }));
+    const charges = within(gains).getByRole("list", { name: "Charges" });
+    expect(charges.textContent).toMatch(/no charges in the file/);
+    expect(charges.textContent).not.toMatch(/sale/);  // "S" isn't loaded
+  });
+});
+
+describe("Charges in why? after review (QA)", () => {
+  const base = { trade_date: "2015-01-01", instrument: "INE000A01011", side: "BUY", quantity: "1000", price: "500",
+    stt: "0", segment: "EQUITY", executed_at: null };
+
+  it("names charges entered by hand, and older Angel One imports", async () => {
+    mockEngine(report({ capital_gains: [{ ...report().capital_gains[0], open_trade_id: "OPENING:x:1", close_trade_id: "ANGELONE:NSE:9#delivery" }] }));
+    await renderWith({ trades: [{ ...base, trade_id: "OPENING:x:1", charges: "12" },
+      { ...base, trade_id: "ANGELONE:NSE:9", side: "SELL", charges: "4" }] as never });
+    const gains = await screen.findByLabelText("Capital gains");
+    fireEvent.click(within(gains).getByRole("button", { name: "Why?" }));
+    const charges = within(gains).getByRole("list", { name: "Charges" });
+    expect(charges.textContent).toMatch(/₹12.00 \(entered by hand\)/);
+    expect(charges.textContent).toMatch(/₹4.00 \(not broken down by type\)/);
+  });
+
+  it("says when nothing was entered for a hand-entered lot", async () => {
+    mockEngine(report({ capital_gains: [{ ...report().capital_gains[0], open_trade_id: "MANUAL:1" }] }));
+    await renderWith({ trades: [{ ...base, trade_id: "MANUAL:1", charges: "0" }] as never });
+    const gains = await screen.findByLabelText("Capital gains");
+    fireEvent.click(within(gains).getByRole("button", { name: "Why?" }));
+    expect(within(gains).getByRole("list", { name: "Charges" }).textContent).toMatch(/no charges entered/);
+  });
+});
+
+describe("Charges in why? after a split (QA round 2)", () => {
+  it("counts the purchase in today's shares", async () => {
+    const line = { ...report().capital_gains[0], quantity: "8", split_factor: "2", open_trade_id: "B" };
+    mockEngine(report({ capital_gains: [line] }));
+    await renderWith({ trades: [{ trade_id: "B", trade_date: "2015-01-01", instrument: "INE000A01011", side: "BUY",
+      quantity: "10", price: "500", charges: "5", stt: "0", segment: "EQUITY", executed_at: null }] as never });
+    const gains = await screen.findByLabelText("Capital gains");
+    fireEvent.click(within(gains).getByRole("button", { name: "Why?" }));
+    const charges = within(gains).getByRole("list", { name: "Charges" });
+    expect(charges.textContent).toMatch(/After a split, this purchase is 20 shares; 8 of them are in this line\./);
+    expect(charges.textContent).not.toMatch(/8 of those 10/);
+  });
+});

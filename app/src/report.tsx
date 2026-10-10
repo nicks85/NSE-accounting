@@ -19,6 +19,8 @@ export type GainLine = {
   manual: boolean; open_trade_id: string; close_trade_id: string; citations: Citation[];
   /** The demat account the sale was made from (FIFO runs per account). */
   account?: string | null;
+  /** Shares per share bought, after splits since the purchase ("1" when none). */
+  split_factor?: string;
 };
 export type BusinessLine = {
   instrument: string; opened_on: string; closed_on: string; quantity: string; income: string;

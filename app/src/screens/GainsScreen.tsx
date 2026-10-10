@@ -111,6 +111,48 @@ function NeedsInput({ report, unclassified }: { report: Report; unclassified: st
   );
 }
 
+const CHARGE_LABELS: Record<string, string> = {
+  BROKERAGE: "brokerage", GST: "GST", EXCHANGE: "exchange charges", SEBI: "SEBI fee", STAMP: "stamp duty",
+  IPFT: "IPFT charges", OTHER: "other charges",
+};
+
+/** The charges of the whole buy or sell trade a line came from (brief 0005 B1): the figures on
+ *  the contract note, and how many of that trade's shares are in this line. */
+function TradeCharges({ label, tradeId, quantity, factor = "1" }: {
+  label: string; tradeId: string; quantity: string; factor?: string;
+}) {
+  const { session } = useSession();
+  // A slice of a trade adds "#delivery" or "#intraday" to the whole trade's id. Other "#"s are
+  // part of the id (a fund's folio, "CAS:ISIN#folio:…").
+  const id = tradeId.replace(/(#delivery|#intraday)+$/, "");
+  const trade = [...session.trades, ...session.manualBuys.map((m) => m.trade)].find((t) => t.trade_id === id);
+  if (!trade) return null;
+  const parts = Object.entries(trade.charge_parts ?? {});
+  const stt = isZero(trade.stt) ? null : <>STT {inr(trade.stt)}</>;
+  const byHand = /^(MANUAL|OPENING):/.test(trade.trade_id);
+  const charges = parts.length > 0
+    ? parts.map(([kind, amount]) => `${CHARGE_LABELS[kind] ?? kind} ${inr(amount)}`).join(", ")
+    : isZero(trade.charges) ? null
+    : byHand ? `${inr(trade.charges)} (entered by hand)`
+    : `${inr(trade.charges)} (not broken down by type)`;
+  const none = byHand ? "no charges entered" : "no charges in the file";
+  // After a split the line counts today's shares: compare with the purchase in today's shares.
+  const split = Number(factor);
+  const used = Number(quantity), whole = Number(trade.quantity) * split;
+  return (
+    <li>
+      {label} ({qty(trade.quantity)} on {trade.trade_date}):{" "}
+      {charges ?? (stt ? null : none)}
+      {charges && stt ? "; " : null}{stt}.
+      {used < whole && split === 1 && <span className="muted"> {qty(quantity)} of those {qty(trade.quantity)} are in this line.</span>}
+      {used < whole && split !== 1 && (
+        <span className="muted"> After a split, this purchase is {String(whole)} shares; {qty(quantity)} of them are in this line.</span>
+      )}
+      {used > whole && <span className="muted"> This line’s {qty(quantity)} shares come from it after a bonus or other corporate action.</span>}
+    </li>
+  );
+}
+
 function LineRow({ line }: { line: GainLine }) {
   const [open, setOpen] = useState(false);
   const { session } = useSession();
@@ -142,6 +184,11 @@ function LineRow({ line }: { line: GainLine }) {
               {!isZero(line.stripped_loss) && <> + ignored bonus-stripping loss {inr(line.stripped_loss)}</>}
               {" "}= {inr(line.gain)}.
             </p>
+            <ul className="why" aria-label="Charges">
+              <TradeCharges label="Charges on the purchase" tradeId={line.open_trade_id} quantity={line.quantity}
+                factor={line.split_factor} />
+              <TradeCharges label="Charges on the sale" tradeId={line.close_trade_id} quantity={line.quantity} />
+            </ul>
             <Why citations={line.citations} />
           </td>
         </tr>

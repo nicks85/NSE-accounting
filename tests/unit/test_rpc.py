@@ -568,3 +568,17 @@ def test_preview_compares_charges_with_the_files_summary(ledger_dir: Path) -> No
         assert summary["charges_check"] == verdict
         assert (summary["charges"], summary["stt"]) == ("5", "1")
         assert summary["by_name"] == ["NAME:SYNTHETIC ALPHA LTD"]
+
+
+def test_charge_parts_travel_and_the_pdf_has_the_charges_table(ledger_dir: Path) -> None:
+    from dataclasses import replace as with_
+
+    typed = with_(buy("2025-05-01", 10, 100, trade_id="A:1"), charges=Decimal("23.6"),
+                  charge_parts=(("BROKERAGE", Decimal(20)), ("GST", Decimal("3.6"))))
+    data = trade_to_json(typed)
+    assert data["charge_parts"] == {"BROKERAGE": "20", "GST": "3.6"}
+    pdf = ok("export_pdf", year=2025,
+             trades=[data, trade_to_json(sell("2025-07-01", 10, 120, trade_id="A:2"))])
+    assert pdf["pdf_base64"]
+    bad = call("compute", year=2025, trades=[{**data, "charge_parts": {"BROKERAGE": "1"}}])
+    assert "don't add up" in bad["error"]["message"]

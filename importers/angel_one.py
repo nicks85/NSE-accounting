@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
-from engine.models import Segment, Side, Trade
+from engine.models import CHARGE_KINDS, Segment, Side, Trade
 from engine.money import ZERO
 from importers.base import (
     ImportFormatError,
@@ -58,6 +58,10 @@ CHARGES_TOLERANCE = Decimal(1)
 CHARGE_COLUMNS = ("brokerage", "gst", "sebi_tax", "exchange_turnover_charges", "stamp_duty",
                   "other_charges", "ipft_charges")
 """Per-trade charges other than STT."""
+CHARGE_KIND = {"brokerage": "BROKERAGE", "gst": "GST", "sebi_tax": "SEBI",
+               "exchange_turnover_charges": "EXCHANGE", "stamp_duty": "STAMP",
+               "other_charges": "OTHER", "ipft_charges": "IPFT"}
+"""Each charge column's type in the ledger (brief 0005)."""
 NON_TRADE_LABELS = ("dp_charges", "interest_charges", "monthly_account_maintenance",
                     "pledge_charges", "call_and_trade_charges", "margin_shortfall_penalty")
 
@@ -148,7 +152,11 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
             return row[index].strip() if index is not None and index < len(row) else ""
 
         stt = _amount(cell("stt"), where=f"{where} STT")
-        charges = sum((_amount(cell(c), where=f"{where} {c}") for c in CHARGE_COLUMNS), ZERO)
+        found = {CHARGE_KIND[c]: amount for c in CHARGE_COLUMNS
+                 if (amount := _amount(cell(c), where=f"{where} {c}"))}
+        # In the ledger's order of types, so a trade reads back exactly as imported.
+        parts = tuple((kind, found[kind]) for kind in CHARGE_KINDS if kind in found)
+        charges = sum((amount for _, amount in parts), ZERO)
         charges_in_rows += charges + stt  # duplicates are taken out again below
         segment_code = cell("segment").upper()
         segment = PROFILE.segments.get(segment_code)
@@ -192,6 +200,7 @@ def _parse_rows(rows: list[list[str]], isin_map: Mapping[str, str], name: str) -
                 charges=charges,
                 stt=stt,
                 segment=segment,
+                charge_parts=parts,
             )
         except ValueError as error:
             raise ImportFormatError(f"{where}: {error}") from None
