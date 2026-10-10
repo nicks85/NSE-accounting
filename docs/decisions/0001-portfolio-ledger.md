@@ -661,3 +661,12 @@ Five sheets:
   held with a fund house are pointed to the CAS, which has their full history.
 - **Not done:** the depository CAS quantity cross-check (D5 d) and broker Tax P&L opening lots
   (task 14).
+
+### Task 12 — Angel One built-in layout (2026-10-10): done
+
+- **Already built under brief 0002 (commit `ddced7a`):** the Angel One trade-history importer
+  and its synthetic fixture. The import preview with its charges check (task 9, brief 0004)
+  and charges by type (task 10, brief 0005) completed it.
+- **Left, but not part of task 12:**
+  - company names → ISINs (task 11);
+  - Angel One's F&O and intraday rows, whose layout is unknown without a sample (Q-030).
