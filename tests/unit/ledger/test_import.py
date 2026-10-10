@@ -187,3 +187,31 @@ def test_a_corrected_opening_lot_is_a_conflict_not_a_duplicate(ledger: Ledger,
                                         [replace(lot, charges=d("12"))])
     assert len(as_gift.conflicts) == 1 and len(with_charges.conflicts) == 1
     assert len(ledger.trades(person)) == 1
+
+
+def test_a_rehearsal_rolls_everything_back(ledger: Ledger, person: int) -> None:
+    """The import preview: real saves, in order, then undone; even when a step fails."""
+    with ledger.rehearsal():
+        first = ledger.import_trades(person, Batch(file_sha256="a"), [buy("2025-04-02", 1, 1,
+                                                                          trade_id="Z1")])
+        again = ledger.import_trades(person, Batch(file_sha256="b"), [buy("2025-04-02", 1, 1,
+                                                                          trade_id="Z1")])
+        assert (first.added, again.duplicates) == (1, 1)  # file 2 sees file 1
+        with pytest.raises(LedgerError, match="already in the ledger"):
+            ledger.add_batch(person, Batch(file_sha256="a"), [])  # fails inside its savepoint
+        assert len(ledger.trades(person)) == 1  # a failed step inside keeps the rest
+    assert ledger.trades(person) == [] and ledger.batches(person) == []
+    with pytest.raises(RuntimeError), ledger.rehearsal():
+        ledger.import_trades(person, Batch(file_sha256="c"), [buy("2025-04-02", 1, 1)])
+        raise RuntimeError("boom")
+    assert ledger.trades(person) == []
+    ledger.import_trades(person, Batch(file_sha256="d"), [buy("2025-04-02", 1, 1)])  # still usable
+    assert len(ledger.trades(person)) == 1
+
+
+def test_a_rehearsal_does_not_hide_an_error_sqlite_already_rolled_back(ledger: Ledger,
+                                                                       person: int) -> None:
+    with pytest.raises(RuntimeError, match="disk"), ledger.rehearsal():
+        ledger._db.execute("ROLLBACK")  # what SQLite does by itself on some I/O errors
+        raise RuntimeError("disk I/O error")
+    assert ledger.trades(person) == []

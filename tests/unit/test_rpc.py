@@ -236,9 +236,11 @@ def test_ledger_profile_import_dedupe_and_undo(ledger_dir: Path) -> None:
     assert ok("ledger_profile")["profile"]["name"] == "Me"
     first = ok("ledger_import", profile_id=person, broker="zerodha",
                files=[zerodha_file("apr.csv", APRIL)])
-    assert first["files"] == [{"name": "apr.csv", "added": 2, "duplicates": 0,
-                               "already_imported_on": None, "conflicts": [],
-                               "possible_duplicates": 0}]
+    [summary] = first["files"]
+    assert {k: summary[k] for k in ("name", "added", "duplicates", "already_imported_on",
+                                    "conflicts", "possible_duplicates")} == {
+        "name": "apr.csv", "added": 2, "duplicates": 0, "already_imported_on": None,
+        "conflicts": [], "possible_duplicates": 0}
     assert len(first["trades"]) == 2 and first["batches"][0]["broker"] == "zerodha"
     assert (ledger_dir / "kosh.sqlite").is_file()
 
@@ -518,3 +520,51 @@ def test_transfer_and_assign_details_over_rpc(ledger_dir: Path) -> None:
     assert next(t["account"] for t in assigned["trades"] if t["trade_id"] == lot_id) == "Groww"
     assert "trade_ids must be" in call("ledger_assign_account", profile_id=person,
                                        account="Groww", trade_ids="x")["error"]["message"]
+
+
+def test_import_preview_then_save(ledger_dir: Path) -> None:
+    """Brief 0004: the preview says what saving would do and stores nothing; saving checks the
+    files are the ones previewed."""
+    person = ok("ledger_profile")["profile"]["id"]
+    ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
+    files = [zerodha_file("a.csv", APRIL),
+             zerodha_file("all.csv", [*APRIL, Row("SYNTHA", "2025-05-02", "sell", "15", "120")])]
+    preview = ok("ledger_import", profile_id=person, broker="zerodha", mode="preview",
+                 files=files)
+    assert preview["saved"] is False and len(preview["trades"]) == 2  # nothing stored
+    old, new = preview["files"]
+    assert old["already_imported_on"] and old["imported_into"] == "Zerodha"
+    assert (new["added"], new["duplicates"], new["trades"], new["buys"], new["sells"]) == (
+        1, 2, 3, 2, 1)
+    assert (new["date_from"], new["date_to"], new["account"]) == (
+        "2025-04-02", "2025-05-02", "Zerodha")
+    assert (new["charges_check"], new["stated_charges"], new["by_name"]) == ("none", None, [])
+    assert new["notes"] and new["sha256"]
+
+    changed = call("ledger_import", profile_id=person, broker="zerodha", mode="save",
+                   files=files, expected=["0" * 64 for _ in preview["files"]])
+    assert "changed since the preview" in changed["error"]["message"]
+    saved = ok("ledger_import", profile_id=person, broker="zerodha", mode="save", files=files,
+               expected=[f["sha256"] for f in preview["files"]])
+    assert saved["saved"] is True and len(saved["trades"]) == 3
+    assert "mode must be" in call("ledger_import", profile_id=person, broker="zerodha",
+                                  mode="x", files=files)["error"]["message"]
+    assert "expected must" in call("ledger_import", profile_id=person, broker="zerodha",
+                                   expected="x", files=files)["error"]["message"]
+
+
+def test_preview_compares_charges_with_the_files_summary(ledger_dir: Path) -> None:
+    from tests.fixtures import angel_one as ao
+
+    person = ok("ledger_profile")["profile"]["id"]
+    rows = [ao.Row("SYNTHETIC ALPHA LTD", "BUY", "100", 10, "2025-05-02", "1", brokerage="5",
+                   stt="1")]
+    for total, verdict in ((None, "matches"), ("50", "differs")):
+        data = ao.trades_csv(rows, **({"total_trade_charges": total} if total else {}))
+        preview = ok("ledger_import", profile_id=person, broker="angelone", mode="preview",
+                     files=[{"name": f"a{verdict}.csv",
+                             "data_base64": base64.b64encode(data).decode()}])
+        [summary] = preview["files"]
+        assert summary["charges_check"] == verdict
+        assert (summary["charges"], summary["stt"]) == ("5", "1")
+        assert summary["by_name"] == ["NAME:SYNTHETIC ALPHA LTD"]

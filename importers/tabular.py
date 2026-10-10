@@ -7,6 +7,7 @@ import io
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from decimal import Decimal
 
 from engine.models import Segment, Side, Trade
 from importers.base import (
@@ -291,4 +292,13 @@ def merge_results(parts: list[ImportResult], source: str, confirmed: bool) -> Im
     warnings = list(dict.fromkeys(w for p in parts for w in p.warnings))
     if repeats:
         warnings.append(f"{repeats} trade(s) appeared in more than one file and were counted once")
-    return ImportResult(source, tuple(trades[i] for i in order), tuple(warnings), confirmed)
+    return ImportResult(source, tuple(trades[i] for i in order), tuple(warnings), confirmed,
+                        _all_or_none([p.stated_charges for p in parts]),
+                        _all_or_none([p.row_charges for p in parts]))
+
+
+def _all_or_none(values: list[Decimal | None]) -> Decimal | None:
+    """The sum when every file gives the figure, else None (a partial sum would mislead)."""
+    if not values or any(v is None for v in values):
+        return None
+    return sum((v for v in values if v is not None), Decimal(0))
