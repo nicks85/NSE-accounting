@@ -207,3 +207,12 @@ def test_fund_like_names_are_flagged_anywhere_in_the_name(name: str, flagged: bo
     data = trades_xlsx([Row(name, "Buy", "10", 1, "2025-05-02", "1")])
     warnings = load_angel_one_tradebooks([("a.xlsx", data)]).result.warnings
     assert any("looks like an ETF" in w for w in warnings) is flagged
+
+
+def test_every_trade_keeps_its_name_as_written_even_when_mapped() -> None:
+    """The ledger keeps it, so a confirmed name can be undone (brief 0007)."""
+    rows = [_buy(), Row(BETA, "Buy", "10", 1, "2025-05-02", "13")]
+    loaded = load_angel_one_tradebooks([("a.xlsx", trades_xlsx(rows))],
+                                       isin_map={ALPHA: SYNTH_A})
+    assert {t.instrument: loaded.scrips[t.trade_id] for t in loaded.result.trades} == {
+        SYNTH_A: ALPHA, NAME_PREFIX + BETA: BETA}

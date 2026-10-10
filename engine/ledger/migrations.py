@@ -186,7 +186,28 @@ UPDATE trade SET account_id = (SELECT a.id FROM account a WHERE a.profile_id = t
     AND (SELECT COUNT(*) FROM account a WHERE a.profile_id = trade.profile_id) = 1;
 """
 
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1), (2, V2), (3, V3))
+V4 = """
+-- Brief 0007: a company name confirmed as an ISIN, per person and broker. What the
+-- confirmation moved (the name's and the ISIN's settings before, and the name's transfers) is
+-- kept, so undoing it puts them back.
+CREATE TABLE name_alias (
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  broker TEXT NOT NULL, raw_name TEXT NOT NULL,
+  instrument_id INTEGER NOT NULL REFERENCES instrument(id),
+  confirmed_at TEXT NOT NULL,
+  name_setting_json TEXT NOT NULL, isin_setting_json TEXT NOT NULL,
+  moved_transfers_json TEXT NOT NULL,
+  PRIMARY KEY (profile_id, broker, raw_name)
+);
+
+-- Trades imported by name keep the name as written (raw_symbol), so an undo finds them all.
+UPDATE trade SET raw_symbol = (SELECT substr(i.isin, 6) FROM instrument i
+                               WHERE i.id = trade.instrument_id)
+  WHERE raw_symbol IS NULL
+    AND instrument_id IN (SELECT id FROM instrument WHERE isin LIKE 'NAME:%');
+"""
+
+MIGRATIONS: tuple[tuple[int, str], ...] = ((1, V1), (2, V2), (3, V3), (4, V4))
 """(schema version, SQL) in order. The latest version is the last entry's."""
 
 LATEST = MIGRATIONS[-1][0]
