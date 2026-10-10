@@ -2,7 +2,7 @@
 docs/sources/income-tax-act-2025-as-amended-by-fa-2026.pdf; 1961 Act numbers are not yet
 checked against an official 1961 text (docs/OPEN_QUESTIONS.md Q-001)."""
 
-from engine.rules.base import ACT_2025_URL, CBDT_CG_FAQ_URL, Citation
+from engine.rules.base import ACT_2025_URL, CBDT_CG_FAQ_URL, CBDT_CIRCULAR_768_URL, Citation
 
 HOLDING_PERIOD = Citation(
     "Listed shares are short-term if held for not more than 12 months",
@@ -11,6 +11,11 @@ HOLDING_BOUNDARY = Citation(
     "Sale within a few days of the 12-month boundary: day-count convention assumed",
     "s.2(42A)", "s.2(101)(a),(b)", ACT_2025_URL, unverified=True, question="Q-013")
 FIFO = Citation("FIFO for demat securities", "s.45(2A)", "s.67(7)(c)", ACT_2025_URL)
+FIFO_PER_ACCOUNT = Citation(
+    "FIFO applied separately in each demat account; shares moved in from another of your "
+    "accounts queue by the date they entered (CBDT Circular 768) but keep their purchase date "
+    "and cost", "s.45(2A); Circular 768", "s.67(7)(c)", CBDT_CIRCULAR_768_URL,
+    unverified=True, question="Q-026")
 COMPUTATION = Citation(
     "Gain = sale value - transfer expenses - cost; STT not deductible",
     "s.48", "s.72(1), s.72(3)(b)", ACT_2025_URL)
@@ -115,7 +120,8 @@ COMMON = {
         SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,
-        CARRY_SPECULATIVE, RETURN_OF_LOSS, BONUS_STRIPPING, BONUS_STRIPPING_WINDOW,
+        CARRY_SPECULATIVE, RETURN_OF_LOSS, FIFO_PER_ACCOUNT, BONUS_STRIPPING,
+        BONUS_STRIPPING_WINDOW,
         ROUNDING,
     )
 }

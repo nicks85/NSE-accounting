@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { fileToBase64, rpc } from "../engine";
 import { Backup } from "./Backup";
 import { OpeningForm, TemplateButton } from "./OpeningHoldings";
-import { useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
+import { ledgerFields, useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
 
 type Broker = "zerodha" | "upstox" | "angelone" | "mapped" | "cas" | "opening";
 
@@ -34,6 +34,8 @@ type FileOutcome = {
   added: number;
   duplicates: number;
   already_imported_on: string | null;
+  /** For a file already imported: the account its trades went into. */
+  imported_into?: string | null;
   conflicts: { new: Trade; existing: Trade; reason: "same_id" | "other_source" }[];
   /** Saved, but matching a saved trade from another source (no times to tell them apart). */
   possible_duplicates: number;
@@ -59,7 +61,13 @@ function when(iso: string): string {
 
 function FileLine({ file }: { file: FileOutcome }) {
   if (file.already_imported_on) {
-    return <li>{file.name}: already imported on {when(file.already_imported_on)}. Nothing was read from it.</li>;
+    return (
+      <li>
+        {file.name}: already imported on {when(file.already_imported_on)}
+        {file.imported_into ? <> into {file.imported_into}</> : null}. Nothing was read from it.
+        {file.imported_into && <span className="muted"> To put its trades in another account, undo that import below and import it again.</span>}
+      </li>
+    );
   }
   if (file.conflicts.length > 0) {
     return (
@@ -110,9 +118,9 @@ function FileLine({ file }: { file: FileOutcome }) {
 async function reload(profileId: number | null, update: ReturnType<typeof useSession>["update"]) {
   if (profileId === null) return;
   try {
-    const { trades, batches } = await rpc<LedgerState>("ledger_state", { profile_id: profileId });
-    if (!Array.isArray(trades) || !Array.isArray(batches)) return;
-    update((current) => (current.profileId !== profileId ? {} : { trades, batches, ...forgetRemoved(current, trades) }));
+    const state = await rpc<LedgerState>("ledger_state", { profile_id: profileId });
+    if (!Array.isArray(state.trades) || !Array.isArray(state.batches)) return;
+    update((current) => (current.profileId !== profileId ? {} : { ...ledgerFields(state), ...forgetRemoved(current, state.trades) }));
   } catch {
     // the error already shown is the useful one
   }
@@ -140,7 +148,7 @@ function History() {
       const result = await rpc<LedgerState>("ledger_undo", { profile_id: profileId, batch_id: batch.id });
       // A reply for another person (switched while waiting) must never touch this session.
       update((current) => (current.profileId !== profileId ? {}
-        : { trades: result.trades, batches: result.batches, ...forgetRemoved(current, result.trades) }));
+        : { ...ledgerFields(result), ...forgetRemoved(current, result.trades) }));
     } catch (e) {
       setError((e as Error).message);
       await reload(profileId, update);
@@ -199,6 +207,12 @@ export function ImportScreen() {
   useEffect(() => setLast(null), [session.profileId, session.revision]);
   const source = SOURCES.find((s) => s.id === broker)!;
   const single = broker === "cas" || broker === "opening";
+  // FIFO runs per demat account (brief 0003): one account per broker unless named otherwise.
+  const [account, setAccount] = useState<string | null>(null);
+  useEffect(() => setAccount(null), [session.profileId]);  // a typed account belongs to one person
+  const defaultAccount = broker === "mapped" ? brokerName.trim()
+    : broker === "opening" ? (session.accounts.length === 1 ? session.accounts[0] : "")
+    : (BROKER_LABEL[broker] ?? "");
   const missingColumns = broker === "mapped"
     ? MAPPED_FIELDS.filter((f) => f.required && !mapping[f.field]?.trim()).map((f) => f.label)
     : [];
@@ -215,6 +229,7 @@ export function ImportScreen() {
       const params = {
         broker,
         password: password || undefined,
+        account: broker === "cas" ? undefined : (account ?? defaultAccount).trim() || undefined,
         files: await Promise.all(files.map(async (f) => ({ name: f.name, data_base64: await fileToBase64(f) }))),
         ...(broker === "mapped"
           ? { mapping, key: brokerName.toUpperCase().replace(/[^A-Z0-9]/g, "") || "MAPPED", source: `${brokerName} (mapped)` }
@@ -228,8 +243,7 @@ export function ImportScreen() {
         if (current.profileId !== profileId) return {};
         const guessed = Object.keys(result.suggested_classes).filter((isin) => !(isin in current.fundClasses));
         return {
-          trades: result.trades,
-          batches: result.batches,
+          ...ledgerFields(result),
           fundClasses: { ...result.suggested_classes, ...current.fundClasses },
           unconfirmed: [...current.unconfirmed, ...guessed],
           names: { ...result.scheme_names, ...current.names },
@@ -260,7 +274,7 @@ export function ImportScreen() {
           <legend>1. Source</legend>
           {SOURCES.map((s) => (
             <label key={s.id} className="choice">
-              <input type="radio" name="broker" value={s.id} checked={broker === s.id} onChange={() => { setBroker(s.id); setFiles([]); setInputKey((k) => k + 1); setLast(null); }} />
+              <input type="radio" name="broker" value={s.id} checked={broker === s.id} onChange={() => { setBroker(s.id); setAccount(null); setFiles([]); setInputKey((k) => k + 1); setLast(null); }} />
               {s.label}
             </label>
           ))}
@@ -272,6 +286,16 @@ export function ImportScreen() {
           {broker === "opening" && <p><TemplateButton /></p>}
           <label htmlFor="files">Choose {broker === "cas" ? "the CAS PDF" : broker === "opening" ? "the filled-in template" : "tradebook file(s)"}</label>
           <input key={inputKey} id="files" type="file" accept={source.accept} multiple={!single} onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+          {broker !== "cas" && (
+            <>
+              <label htmlFor="account">Demat account {broker === "opening" ? "(unless a row names its own)" : "these trades are in"}</label>
+              <input id="account" list="known-accounts" value={account ?? defaultAccount} maxLength={60}
+                placeholder="e.g. Zerodha" onChange={(e) => setAccount(e.target.value)} />
+              <datalist id="known-accounts">{session.accounts.map((a) => <option key={a} value={a} />)}</datalist>
+              <p className="muted">Shares are matched first-in-first-out within each demat account (CBDT Circular 768). Keep the
+                broker’s name unless you have two accounts with the same broker.</p>
+            </>
+          )}
           {broker !== "opening" && <>
             <label htmlFor="password">Password {broker === "cas" ? "(required for CAS)" : "(only for protected XLSX)"}</label>
             <input id="password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />

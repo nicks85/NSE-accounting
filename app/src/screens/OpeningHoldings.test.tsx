@@ -58,7 +58,8 @@ describe("Opening holdings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add another lot" }));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save holdings" })));
     expect(calls[0]).toMatchObject({ method: "ledger_add_opening", params: { profile_id: 1, rows: [
-      { isin: "INE000A01012", name: "SYNTH ALPHA", quantity: "1000", buy_date: "2016-04-01", price: "100", how_acquired: "ipo" }] } });
+      { isin: "INE000A01012", name: "SYNTH ALPHA", quantity: "1000", buy_date: "2016-04-01", price: "100", how_acquired: "ipo",
+        account: "", entered_on: "" }] } });
     expect(screen.getByText(/^Saved 1 holding; 1 already saved and skipped\. A lot with the same date.*Note: row 1: fractional share quantity 1\.5\.$/)).toBeTruthy();
     expect(state()).toMatchObject({ trades: [LOT], batches: [BATCH], names: { INE000A01012: "SYNTH ALPHA" }, working: false });
     expect(screen.getByRole("table", { name: "Import history" }).textContent).toMatch(/Entered by hand.*Opening holdings/);
@@ -128,5 +129,23 @@ describe("Opening holdings (QA)", () => {
     fireEvent.change(screen.getByLabelText("ISIN, lot 1"), { target: { value: "INE000A01012" } });
     fireEvent.click(screen.getByRole("button", { name: "switch" }));
     expect((screen.getByLabelText("ISIN, lot 1") as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("Opening holdings in accounts", () => {
+  it("fills the only account in, and asks when moved shares arrived", async () => {
+    const calls = engine({ ledger_add_opening: { result: { added: 1, duplicates: 0, names: {}, trades: [LOT], batches: [BATCH],
+      conflicts: [], warnings: [] } } });
+    render(<SessionProvider initial={{ ...EMPTY_SESSION, profileId: 1, settingsLoaded: true, accounts: ["Zerodha"] }}><ImportScreen /></SessionProvider>);
+    fireEvent.click(screen.getByLabelText("Holdings from before your first tradebook"));
+    expect((screen.getByLabelText("Demat account, lot 1") as HTMLInputElement).value).toBe("Zerodha");
+    expect(screen.queryByLabelText("Arrived on, lot 1")).toBeNull();
+    fireEvent.change(screen.getByLabelText("How acquired, lot 1"), { target: { value: "transfer" } });
+    for (const [label, value] of [["ISIN, lot 1", "INE000A01012"], ["Quantity, lot 1", "10"], ["Bought on, lot 1", "2016-04-01"],
+                                  ["Price, lot 1", "100"], ["Arrived on, lot 1", "2020-01-02"], ["Demat account, lot 1", "Groww"]]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save holdings" })));
+    expect(calls[0].params.rows).toEqual([expect.objectContaining({ how_acquired: "transfer", entered_on: "2020-01-02", account: "Groww" })]);
   });
 });

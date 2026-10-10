@@ -341,20 +341,33 @@ Tax rules that are ambiguous, unverified, or have conflicting sources. Every rul
 - **Needed:** a test upload into the official ITR utility; CA review of line placement.
 - **Status:** open.
 
-## Q-026 — FIFO per demat account or across all accounts
+## Q-026 — FIFO per demat account, and shares moved between one's own accounts
 
-- **Area:** `engine/matching/fifo.py`; decision brief 0001 (D4).
-- **Rule cited:** FIFO for securities held in demat form — 1961 Act s.45(2A), 2025 Act
-  s.67(7)(c) (`FIFO` citation).
-- **Problem:** the matcher runs FIFO per instrument across every imported file. The rule is
-  commonly read as applying **within each demat account**: a sale from account B is matched
-  only against purchases into account B. With two brokers, the two readings give different
-  cost and holding period for the same sale. Moves between one's own accounts are not
-  transfers for capital gains and should keep the original date and cost.
-- **Proposed best guess:** FIFO per demat account, `UNVERIFIED`, with a "transfer between my
-  accounts" entry that carries lots across.
-- **Needed:** CBDT circular or text confirming per-account application; CA view.
-- **Status:** open (awaiting approval of brief 0001).
+- **Area:** `engine/matching/fifo.py`; decision briefs 0001 (D4) and 0003.
+- **Rule cited:** FIFO for securities held in demat form (1961 Act s.45(2A); 2025 Act
+  s.67(7)(c)).
+- **Found:** CBDT Circular 768 (24-Jun-1998), read through a reproduction on taxguru.in. The
+  incometaxindia.gov.in page refused automated access, so it still needs checking against the
+  official copy. Two passages:
+  - "FIFO method will be applied accountwise. This is because in case where a particular
+    account of an investor is debited for sale of securities, the securities lying in his
+    other account cannot be construed to have been sold"
+  - "under the FIFO method, the basis for determining the movement out of the account is the
+    date of entry into the account"
+- **Implemented (brief 0003, approved 2026-10-10):**
+  - FIFO runs per demat account.
+  - Same-day intraday netting happens within one account.
+  - Shares moved between one's own accounts leave the source FIFO, and queue in the
+    destination by the date they arrived.
+  - **They keep their purchase date and cost.** This is a reading of s.2(47): the owner doesn't
+    change, so it isn't a transfer.
+  - **Tax totals stay per person**, as in one return per PAN.
+- **Still to verify (`UNVERIFIED`):**
+  - Does Circular 768 apply under the 2025 Act (s.67(7)(c))?
+  - Do moved shares keep their original holding period and cost? The circular doesn't say;
+    the 2025 Act definition of "transfer" is still to be found.
+  - Moves to a family member's account are gifts, not covered here (see Q-029).
+- **Status:** partly verified (1961 Act, per-account FIFO); the rest is open.
 
 ## Q-027 — Which charges form part of cost and transfer expenses
 

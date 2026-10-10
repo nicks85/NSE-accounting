@@ -47,7 +47,7 @@ function PurchaseForm({ gap, onDone }: { gap: Shortfall; onDone: () => void }) {
         trade: {
           trade_id: nextId(s.manualBuys), trade_date: date, instrument: gap.instrument, side: "BUY",
           quantity: clean(quantity), price: clean(price), charges: clean(charges) || "0", stt: "0",
-          segment: gap.segment, executed_at: null,
+          segment: gap.segment, executed_at: null, account: gap.account ?? null,
         },
       }],
     }));
@@ -95,8 +95,12 @@ function GapRow({ gap }: { gap: Shortfall }) {
   return (
     <li>
       <p>
-        <strong>{name ?? gap.instrument}</strong>: sold {qty(gap.quantity)} on {gap.sold_on} for {inr(gap.sale_value)}, but
-        no earlier purchase of {qty(gap.quantity)} {gap.segment === "MF" ? "units" : "shares"} is in your files.
+        <strong>{name ?? gap.instrument}</strong>: sold {qty(gap.quantity)} on {gap.sold_on} for {inr(gap.sale_value)}
+        {gap.account ? <> from {gap.account}</> : null}, but no earlier purchase of {qty(gap.quantity)}{" "}
+        {gap.segment === "MF" ? "units" : "shares"} is in {gap.account ? "that account" : "your files"}.
+        {gap.account && session.accounts.length > 1 && (
+          <span className="muted"> If they came from another of your accounts, add a transfer on the Holdings screen instead.</span>
+        )}
       </p>
       {open ? <PurchaseForm gap={gap} onDone={() => setOpen(false)} /> : (
         <>

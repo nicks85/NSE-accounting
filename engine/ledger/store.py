@@ -12,7 +12,7 @@ import json
 import sqlite3
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -23,10 +23,10 @@ from engine import __version__
 from engine.api import TaxYearReport, compute_tax_years
 from engine.classify.funds import FundClass
 from engine.classify.trades import DELIVERY_SUFFIX, OPENING_PREFIX
-from engine.ledger.dedupe import dedupe_keys, details, same_details
+from engine.ledger.dedupe import account_key, dedupe_keys, details, same_details
 from engine.ledger.migrations import LATEST, MIGRATIONS
 from engine.ledger.settings import ManualBuy, Settings
-from engine.models import Segment, Side, Trade
+from engine.models import Segment, Side, Trade, Transfer
 from engine.money import ZERO
 from engine.rules.setoff import LossEntry, LossKind
 
@@ -255,6 +255,8 @@ class Ledger:
             for version, sql in pending:
                 for statement in _statements(sql):
                     self._db.execute(statement)
+                if version == 3:  # accounts now identify opening lots (brief 0003)
+                    self._rekey_opening()
                 self._db.execute(
                     "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
                     "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (str(version),))
@@ -328,6 +330,14 @@ class Ledger:
                 f"the ledger refused the import: {error}") from None
         return batch_id
 
+    def imported_into(self, profile_id: int, file_sha256: str) -> str | None:
+        """The account a live import of this exact file went into, if any."""
+        row = self._db.execute(
+            "SELECT a.label FROM import_batch b JOIN account a ON a.id = b.account_id"
+            " WHERE b.profile_id = ? AND b.file_sha256 = ? AND b.undone_at IS NULL",
+            (profile_id, file_sha256)).fetchone()
+        return str(row[0]) if row else None
+
     def imported_on(self, profile_id: int, file_sha256: str) -> str | None:
         """When this exact file was imported, if it is in a live batch."""
         row = self._db.execute(
@@ -337,13 +347,16 @@ class Ledger:
 
     def import_trades(self, profile_id: int, batch: Batch, trades: Sequence[Trade], *,
                       warnings: Sequence[str] = (),
-                      how_acquired: Mapping[str, str] | None = None) -> ImportOutcome:
+                      how_acquired: Mapping[str, str] | None = None,
+                      account: str | None = None) -> ImportOutcome:
         """Import one file (D3): skip trades already in the ledger, refuse the whole file if a
         trade's key is there with different details, and recognise a file already imported.
         Nothing is stored unless at least one trade is new."""
         if batch.kind not in BATCH_KINDS:
             raise LedgerError(f"unknown batch kind {batch.kind!r}")
         self._require_profile(profile_id)
+        if account is not None:  # the file's account, unless a row names its own
+            trades = [t if t.account else replace(t, account=account) for t in trades]
         keys = dedupe_keys(trades)
         with self._transaction():
             when = self.imported_on(profile_id, batch.file_sha256) if batch.file_sha256 else None
@@ -384,6 +397,9 @@ class Ledger:
             batch_id = self._insert_batch(
                 profile_id, batch, [t for t, _ in fresh], [k for _, k in fresh],
                 rows_read=len(trades), duplicates=duplicates, warnings=warnings, read=trades)
+            if account is not None:
+                self._db.execute("UPDATE import_batch SET account_id = ? WHERE id = ?",
+                                 (self._account_id(profile_id, account), batch_id))
             for trade, key in fresh:
                 if how_acquired and trade.trade_id in how_acquired:
                     self._db.execute(
@@ -463,14 +479,17 @@ class Ledger:
         return _rowid(cursor)
 
     def _insert_trade(self, profile_id: int, batch_id: int, trade: Trade, key: str) -> None:
+        account = (None if trade.segment is Segment.MUTUAL_FUND  # funds are per folio
+                   else self._account_id(profile_id, trade.account))
         cursor = self._db.execute(
             "INSERT INTO trade (profile_id, batch_id, instrument_id, source_id, segment,"
-            " trade_date, executed_at, side, quantity, price, dedupe_key)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " trade_date, executed_at, side, quantity, price, dedupe_key, account_id,"
+            " entered_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (profile_id, batch_id, self._instrument_id(trade), trade.trade_id,
              trade.segment.value, trade.trade_date.isoformat(),
              trade.executed_at.isoformat() if trade.executed_at else None, trade.side.value,
-             decimal_text(trade.quantity), decimal_text(trade.price), key))
+             decimal_text(trade.quantity), decimal_text(trade.price), key, account,
+             trade.entered_on.isoformat() if trade.entered_on else None))
         trade_row = _rowid(cursor)
         # Charges are kept as one total until the per-charge breakdown lands (D8, task 10).
         charges = [("OTHER", trade.charges), ("STT", trade.stt)]
@@ -497,12 +516,14 @@ class Ledger:
             charges.setdefault(trade_row, {})[kind] = text_decimal(amount)
         rows = self._db.execute(
             "SELECT t.id, t.source_id, t.trade_date, COALESCE(i.isin, i.contract_symbol),"
-            " t.side, t.quantity, t.price, t.segment, t.executed_at, t.dedupe_key"
+            " t.side, t.quantity, t.price, t.segment, t.executed_at, ac.label, t.entered_on,"
+            " t.dedupe_key"
             " FROM trade t JOIN instrument i ON i.id = t.instrument_id"
             " JOIN import_batch b ON b.id = t.batch_id"
+            " LEFT JOIN account ac ON ac.id = t.account_id"
             " WHERE t.profile_id = ? AND b.undone_at IS NULL AND (b.kind = 'manual') = ?"
             " ORDER BY t.id", (profile_id, manual))
-        return [(row[0], _trade(row[:9], charges.get(row[0], {})), row[9]) for row in rows]
+        return [(row[0], _trade(row[:11], charges.get(row[0], {})), row[11]) for row in rows]
 
 
 
@@ -526,7 +547,7 @@ class Ledger:
         stored: dict[str, Any] = {
             "fund_classes": saved.fund_classes, "fmv_2018": saved.fmv_2018,
             "brought_forward": saved.brought_forward, "excluded": saved.excluded,
-            "late_returns": saved.late_returns}
+            "late_returns": saved.late_returns, "transfers": self.transfers(profile_id)}
         trades = self.trades(profile_id) + [m.trade for m in saved.manual_buys]
         return compute_tax_years(start_years, trades, **{**stored, **inputs})
 
@@ -697,6 +718,140 @@ class Ledger:
         self._db.execute("UPDATE import_batch SET trades_added = ? WHERE id = ?",
                          (len(buys), batch_id))
 
+    # -- accounts and transfers (brief 0003) --------------------------------------------------
+
+    def accounts(self, profile_id: int) -> list[str]:
+        """The person's demat accounts, by name, in the order they were first used."""
+        self._require_profile(profile_id)
+        return [str(r[0]) for r in self._db.execute(
+            "SELECT label FROM account WHERE profile_id = ? ORDER BY id", (profile_id,))]
+
+    def _find_account(self, profile_id: int, name: str) -> tuple[int, str] | None:
+        """(id, stored name) of the account ``name`` refers to: case, spaces and punctuation
+        are ignored, so "ICICI Direct", "icici-direct" and "ICICIDIRECT" are one account."""
+        wanted = account_key(name)
+        for account_id, label in self._db.execute(
+                "SELECT id, label FROM account WHERE profile_id = ? ORDER BY id", (profile_id,)):
+            if account_key(label) == wanted:
+                return int(account_id), str(label)
+        return None
+
+    def account_name(self, profile_id: int, name: str) -> str | None:
+        """The stored name of the account ``name`` refers to, if there is one."""
+        found = self._find_account(profile_id, name)
+        return found[1] if found else None
+
+    def _account_id(self, profile_id: int, name: str | None) -> int | None:
+        """The account ``name`` refers to, created on first use."""
+        if name is None:
+            return None
+        label = " ".join(name.split())
+        if not account_key(label):
+            raise LedgerError("an account needs a name with a letter or digit")
+        found = self._find_account(profile_id, label)
+        if found:
+            return found[0]
+        return _rowid(self._db.execute(
+            "INSERT INTO account (profile_id, broker, label) VALUES (?, ?, ?)",
+            (profile_id, account_key(label), label)))
+
+    def rename_account(self, profile_id: int, old: str, new: str) -> None:
+        self._require_profile(profile_id)
+        label = " ".join(new.split())
+        if not account_key(label):
+            raise LedgerError("an account needs a name with a letter or digit")
+        with self._transaction():
+            account = self._find_account(profile_id, old)
+            if account is None:
+                raise LedgerError(f"no account called {old!r}")
+            clash = self._find_account(profile_id, label)
+            if clash and clash[0] != account[0]:
+                raise LedgerError(f"there is already an account called {clash[1]!r}")
+            self._db.execute("UPDATE account SET label = ?, broker = ? WHERE id = ?",
+                             (label, account_key(label), account[0]))
+            self._rekey_opening(profile_id)  # opening lots' keys carry the account name
+
+    def assign_account(self, profile_id: int, name: str,
+                       trade_ids: Sequence[str] | None = None) -> int:
+        """Put share trades that have no account yet into ``name`` (all of them, or just
+        ``trade_ids``); returns how many moved. Opening lots get new duplicate keys, since
+        the account is part of what identifies them."""
+        self._require_profile(profile_id)
+        with self._transaction():
+            account = self._account_id(profile_id, name)
+            where = "profile_id = ? AND account_id IS NULL AND segment <> 'MF'"
+            args: list[Any] = [profile_id]
+            if trade_ids is not None:
+                where += f" AND source_id IN ({','.join('?' * len(trade_ids))})"
+                args += list(trade_ids)
+            changed = self._db.execute(
+                f"UPDATE trade SET account_id = ? WHERE {where}",  # noqa: S608 - placeholders
+                (account, *args))
+            try:
+                self._rekey_opening(profile_id)
+            except sqlite3.IntegrityError:
+                raise LedgerError(
+                    f"{name!r} already has the same holding saved (same share, date, quantity "
+                    "and price), so this would count it twice. Undo one of the two entries in "
+                    "the import history first.") from None
+        return changed.rowcount
+
+    def _rekey_opening(self, profile_id: int | None = None) -> None:
+        """Recompute opening lots' duplicate keys (they depend on the lot's account)."""
+        query = ("SELECT t.id, t.profile_id, t.batch_id, t.source_id, t.trade_date,"
+                 " COALESCE(i.isin, i.contract_symbol), t.side, t.quantity, t.price, t.segment,"
+                 " t.executed_at, a.label, t.entered_on FROM trade t"
+                 " JOIN instrument i ON i.id = t.instrument_id"
+                 " LEFT JOIN account a ON a.id = t.account_id"
+                 " WHERE t.source_id LIKE 'OPENING:%'")
+        args: tuple[Any, ...] = ()
+        if profile_id is not None:
+            query += " AND t.profile_id = ?"
+            args = (profile_id,)
+        batches: dict[tuple[int, int], list[tuple[int, Trade]]] = {}
+        for row in self._db.execute(query + " ORDER BY t.id", args).fetchall():
+            trade = _trade((row[0], *row[3:]), {})
+            batches.setdefault((row[1], row[2]), []).append((row[0], trade))
+        for rows in batches.values():  # occurrence counts are per save, as on entry
+            for (row_id, _), key in zip(rows, dedupe_keys([t for _, t in rows]), strict=True):
+                self._db.execute("UPDATE trade SET dedupe_key = ? WHERE id = ?", (key, row_id))
+
+    def add_transfer(self, profile_id: int, on: date, instrument: str, quantity: Decimal,
+                     from_account: str, to_account: str) -> int:
+        """Record shares moved between two of the person's accounts; returns its id."""
+        self._require_profile(profile_id)
+        if not isinstance(quantity, Decimal) or quantity <= 0:
+            raise LedgerError("a transfer needs a positive quantity")
+        with self._transaction():
+            source = self._account_id(profile_id, from_account)
+            target = self._account_id(profile_id, to_account)
+            if source == target:
+                raise LedgerError("a transfer needs two different accounts")
+            return _rowid(self._db.execute(
+                "INSERT INTO transfer (profile_id, on_date, instrument_id, quantity,"
+                " from_account_id, to_account_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (profile_id, on.isoformat(), self._instrument_for(instrument),
+                 decimal_text(quantity), source, target, _now())))
+
+    def remove_transfer(self, profile_id: int, transfer_id: int) -> None:
+        with self._transaction():
+            gone = self._db.execute("DELETE FROM transfer WHERE id = ? AND profile_id = ?",
+                                    (transfer_id, profile_id))
+            if gone.rowcount == 0:
+                raise LedgerError(f"no transfer {transfer_id} for this person")
+
+    def transfers(self, profile_id: int) -> list[Transfer]:
+        self._require_profile(profile_id)
+        return [Transfer(f"TRANSFER:{row[0]}", date.fromisoformat(row[1]), row[2],
+                         text_decimal(row[3]), row[4], row[5])
+                for row in self._db.execute(
+                    "SELECT t.id, t.on_date, COALESCE(i.isin, i.contract_symbol), t.quantity,"
+                    " f.label, g.label FROM transfer t"
+                    " JOIN instrument i ON i.id = t.instrument_id"
+                    " JOIN account f ON f.id = t.from_account_id"
+                    " JOIN account g ON g.id = t.to_account_id"
+                    " WHERE t.profile_id = ? ORDER BY t.on_date, t.id", (profile_id,))]
+
     def _instrument_for(self, code: str) -> int:
         row = self._db.execute(
             "SELECT id FROM instrument WHERE isin = ? OR contract_symbol = ?",
@@ -820,7 +975,8 @@ def _rowid(cursor: sqlite3.Cursor) -> int:
 
 
 def _trade(row: tuple[Any, ...], charges: dict[str, Decimal]) -> Trade:
-    _, source_id, on, instrument, side, quantity, price, segment, executed_at = row
+    (_, source_id, on, instrument, side, quantity, price, segment, executed_at, account,
+     entered) = row
     return Trade(
         trade_id=source_id,
         trade_date=date.fromisoformat(on),
@@ -832,4 +988,6 @@ def _trade(row: tuple[Any, ...], charges: dict[str, Decimal]) -> Trade:
         stt=charges.get("STT", ZERO),
         segment=Segment(segment),
         executed_at=datetime.fromisoformat(executed_at) if executed_at else None,
+        account=account,
+        entered_on=date.fromisoformat(entered) if entered else None,
     )

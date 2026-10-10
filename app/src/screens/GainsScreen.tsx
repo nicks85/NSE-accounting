@@ -135,6 +135,7 @@ function LineRow({ line }: { line: GainLine }) {
         <tr className="why-row">
           <td colSpan={9}>
             <p>
+              {line.account && <>Sold from {line.account}, matched first-in-first-out within that account. </>}
               Held from {line.acquired_on} to {line.sold_on}; long-term if sold after {line.long_term_after}.
               Sale {inr(line.sale_value)} − expenses {inr(line.transfer_expenses)} − cost {inr(line.cost)}
               {line.grandfathered_fmv !== null && <> (actual cost {inr(line.actual_cost)}, 31-Jan-2018 value {inr(line.grandfathered_fmv)})</>}

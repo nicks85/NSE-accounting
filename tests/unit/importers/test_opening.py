@@ -95,3 +95,25 @@ def test_encoding_and_fractional_quantities_are_reported() -> None:
     opening = load_opening_csv(data, name="w.csv", today=TODAY)
     assert any("not UTF-8" in w for w in opening.warnings)
     assert any("fractional share quantity 1.5" in w for w in opening.warnings)
+
+
+def test_account_and_entry_date_columns() -> None:
+    opening = parse_rows([
+        {"isin": ISIN, "quantity": "10", "buy_date": "2016-04-01", "price": "100",
+         "how_acquired": "transfer", "account": "  Groww  ", "entered_on": "2020-01-02"},
+        {"isin": ISIN, "quantity": "5", "buy_date": "2017-04-03", "price": "90",
+         "how_acquired": "transfer"},
+    ], today=TODAY)
+    moved, undated = opening.trades
+    assert (moved.account, moved.entered_on) == ("Groww", date(2020, 1, 2))
+    assert (undated.account, undated.entered_on) == (None, None)
+    assert any("no entered_on date" in w for w in opening.warnings)
+
+
+@pytest.mark.parametrize(("entered", "message"), [("2015-01-01", "between the purchase date"),
+                                                   ("2027-01-01", "between the purchase date"),
+                                                   ("04-01-2020", "could be day/month")])
+def test_bad_entry_dates(entered: str, message: str) -> None:
+    with pytest.raises(ImportFormatError, match=message):
+        parse_rows([{"isin": ISIN, "quantity": "1", "buy_date": "2016-04-01", "price": "1",
+                     "entered_on": entered}], today=TODAY)

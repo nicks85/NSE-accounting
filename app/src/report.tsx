@@ -17,6 +17,8 @@ export type GainLine = {
   quantity: string; sale_value: string; transfer_expenses: string; actual_cost: string; cost: string;
   grandfathered_fmv: string | null; stripped_loss: string; gain: string; bucket: string;
   manual: boolean; open_trade_id: string; close_trade_id: string; citations: Citation[];
+  /** The demat account the sale was made from (FIFO runs per account). */
+  account?: string | null;
 };
 export type BusinessLine = {
   instrument: string; opened_on: string; closed_on: string; quantity: string; income: string;
@@ -37,7 +39,8 @@ export type Report = {
   setoff_steps: { loss: string; against: string; amount: string; citation: Citation }[];
   carried_forward: Loss[];
   expired: Loss[];
-  open_lots: { instrument: string; isin: string; acquired_on: string; quantity: string; cost: string; segment: string }[];
+  open_lots: { instrument: string; isin: string; acquired_on: string; quantity: string; cost: string; segment: string;
+    account?: string | null; entered_on?: string | null }[];
   warnings: Notice[];
   /** False while a sale is missing purchase history: the tax figure is withheld. */
   complete: boolean;
@@ -60,7 +63,7 @@ export type Filing = {
 /** The part of a sale with no earlier purchase to match. */
 export type Shortfall = {
   trade_id: string; instrument: string; isin: string; sold_on: string; quantity: string;
-  price: string; sale_value: string; segment: "EQUITY" | "FNO" | "MF";
+  price: string; sale_value: string; segment: "EQUITY" | "FNO" | "MF"; account?: string | null;
 };
 
 export type ReportState =

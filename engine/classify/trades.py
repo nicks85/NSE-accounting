@@ -54,7 +54,9 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
     delivery: list[Trade] = []
     intraday: list[Trade] = []
     fno: list[Trade] = []
-    groups: dict[tuple[str, date], list[Trade]] = {}
+    # Same-day netting happens within one account: a buy at one broker and a sale at another
+    # on the same day are two delivery trades (brief 0003 D).
+    groups: dict[tuple[str | None, str, date], list[Trade]] = {}
     for trade in trades:
         if trade.segment is Segment.FNO:
             fno.append(trade)
@@ -63,7 +65,8 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
         elif trade.trade_id.startswith((MANUAL_PREFIX, OPENING_PREFIX)):
             delivery.append(trade)
         else:
-            groups.setdefault((trade.instrument, trade.trade_date), []).append(trade)
+            groups.setdefault((trade.account, trade.instrument, trade.trade_date),
+                              []).append(trade)
 
     for group in groups.values():
         bought = sum((t.quantity for t in group if t.side is Side.BUY), ZERO)
@@ -86,7 +89,7 @@ def classify_trades(trades: Iterable[Trade]) -> ClassifiedTrades:
 
     warnings: tuple[str, ...] = ()
     if intraday:
-        days = len({(t.instrument, t.trade_date) for t in intraday})
+        days = len({(t.account, t.instrument, t.trade_date) for t in intraday})
         warnings = (
             f"Intraday trades on {days} scrip-day(s) were classified using an UNVERIFIED "
             "same-day netting convention, see docs/OPEN_QUESTIONS.md Q-004",

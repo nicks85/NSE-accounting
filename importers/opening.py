@@ -36,7 +36,11 @@ from importers.base import (
 )
 from importers.tabular import decode_csv
 
-COLUMNS = ("isin", "name", "quantity", "buy_date", "price", "charges", "how_acquired")
+COLUMNS = ("isin", "name", "quantity", "buy_date", "price", "charges", "how_acquired",
+           "account", "entered_on")
+"""``account``: the demat account the lot is in (blank: the account chosen for the file).
+``entered_on``: for a lot moved in from another of your accounts, the date it arrived; FIFO
+queues it by that date (CBDT Circular 768, brief 0003)."""
 REQUIRED = ("isin", "quantity", "buy_date", "price")
 SOURCE = "Opening holdings"
 
@@ -57,7 +61,7 @@ def template_csv() -> str:
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(COLUMNS)
     writer.writerow(["INE000A01012", "EXAMPLE LTD (replace this row)", "100", "2016-04-01",
-                     "245.50", "12.40", "bought"])
+                     "245.50", "12.40", "bought", "", ""])
     return out.getvalue()
 
 
@@ -99,12 +103,26 @@ def parse_rows(rows: Iterable[Mapping[str, str]], *, today: date,
             raise ImportFormatError(f"{at}: price 0 is only for bonus shares")
         if quantity != quantity.to_integral_value():
             notes.append(f"{at}: fractional share quantity {quantity}")
+        entered = None
+        if cell["entered_on"]:
+            if is_ambiguous_date(cell["entered_on"].replace("-", "/")):
+                raise ImportFormatError(f"{at}: date {cell['entered_on']!r} could be day/month "
+                                        "or month/day; write it as YYYY-MM-DD")
+            entered = parse_date(cell["entered_on"], where=f"{at} entered_on")
+            if not bought <= entered <= today:
+                raise ImportFormatError(f"{at}: entered_on must be between the purchase date "
+                                        "and today")
+        elif acquired == "transfer":
+            notes.append(f"{at}: moved from another account with no entered_on date; it is "
+                         "queued by its purchase date")
         lot = (isin, bought.isoformat(), str(quantity.normalize()), str(price.normalize()))
         seen[lot] = seen.get(lot, 0) + 1
         trade_id = f"{OPENING_PREFIX}{':'.join(lot)}:{seen[lot]}"
         try:
             trades.append(Trade(trade_id, bought, isin, Side.BUY, quantity, price,
-                                charges=charges, segment=Segment.EQUITY))
+                                charges=charges, segment=Segment.EQUITY,
+                                account=" ".join(cell["account"].split()) or None,
+                                entered_on=entered))
         except ValueError as error:
             raise ImportFormatError(f"{at}: {error}") from None
         how[trade_id] = acquired

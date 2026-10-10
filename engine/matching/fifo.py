@@ -29,7 +29,7 @@ from engine.matching.corporate_actions import (
     bonus_lot,
     bonus_lot_id,
 )
-from engine.models import Disposal, Lot, Segment, Side, Trade
+from engine.models import Disposal, Lot, Segment, Side, Trade, Transfer
 
 
 class InsufficientHoldingsError(ValueError):
@@ -52,6 +52,7 @@ class Shortfall:
     quantity: Decimal
     price: Decimal
     segment: Segment
+    account: str | None = None
 
     @property
     def sale_value(self) -> Decimal:
@@ -64,10 +65,16 @@ class MatchResult:
     open_lots: tuple[Lot, ...]
     warnings: tuple[str, ...] = ()
     shortfalls: tuple[Shortfall, ...] = ()
+    transfer_gaps: tuple[tuple[Transfer, Decimal], ...] = ()
+    """Transfers that moved less than asked, with the quantity that wasn't held."""
+
+
+Key = tuple[str | None, str]
+"""(account, instrument): FIFO runs per demat account (CBDT Circular 768, brief 0003)."""
 
 
 class FifoBook:
-    """Mutable per-instrument FIFO queues. Feed trades in chronological order."""
+    """Mutable FIFO queues per (account, instrument). Feed events in chronological order."""
 
     def __init__(self, opening_lots: Iterable[Lot] = (), *, allow_short: bool = False,
                  collect_shortfalls: bool = False) -> None:
@@ -77,12 +84,13 @@ class FifoBook:
         self._allow_short = allow_short
         self._collect = collect_shortfalls
         self._shortfalls: list[Shortfall] = []
-        self._lots: dict[str, deque[Lot]] = {}
+        self._lots: dict[Key, deque[Lot]] = {}
         self._disposals: list[Disposal] = []
         self._warnings: list[str] = []
         self._bonuses: dict[str, list[Bonus]] = {}
-        for lot in sorted(opening_lots, key=lambda lot: lot.acquired_on):
-            self._lots.setdefault(lot.instrument, deque()).append(lot)
+        self._transfer_gaps: list[tuple[Transfer, Decimal]] = []
+        for lot in sorted(opening_lots, key=lambda lot: lot.entry):
+            self._lots.setdefault((lot.account, lot.instrument), deque()).append(lot)
             if lot.source_trade_id.startswith(BONUS_PREFIX):
                 self._warnings.append(
                     f"{lot.source_trade_id}: bonus shares brought in as an opening lot; bonus "
@@ -90,24 +98,46 @@ class FifoBook:
                     "bonus action (docs/OPEN_QUESTIONS.md Q-014)"
                 )
 
-    def lots(self, instrument: str) -> deque[Lot]:
-        return self._lots.setdefault(instrument, deque())
+    def lots(self, instrument: str, account: str | None = None) -> deque[Lot]:
+        return self._lots.setdefault((account, instrument), deque())
 
     def apply(self, trade: Trade) -> None:
         first_new = len(self._disposals)
         self._apply(trade)
         if trade.side is Side.SELL and not self._allow_short:
-            self._strip_bonus(trade.instrument, first_new)
+            self._strip_bonus(trade.instrument, first_new, trade.account)
 
-    def _strip_bonus(self, instrument: str, first_new: int) -> None:
+    def apply_transfer(self, transfer: Transfer) -> None:
+        """Move shares between two of the user's accounts: they leave the source FIFO and
+        queue in the destination by the transfer date, keeping purchase date and cost."""
+        source = self.lots(transfer.instrument, transfer.from_account)
+        held = sum((lot.quantity for lot in source if lot.is_long), Decimal(0))
+        moving = min(held, transfer.quantity)
+        if moving < transfer.quantity:
+            self._transfer_gaps.append((transfer, transfer.quantity - moving))
+        target = self.lots(transfer.instrument, transfer.to_account)
+        while moving > 0:
+            lot, rest = source[0].take(min(moving, source[0].quantity))
+            if rest is None:
+                source.popleft()
+            else:
+                source[0] = rest
+            moving -= lot.quantity
+            _enqueue(target, replace(lot, account=transfer.to_account, entered_on=transfer.on))
+
+    def _strip_bonus(self, instrument: str, first_new: int, account: str | None) -> None:
         """Bonus stripping — Income-tax Act 2025 s.175(9),(10); 1961 Act s.94(8).
 
         A loss on securities bought within 3 months before a bonus record date and sold within
         9 months after it is ignored, if bonus securities are still held after the sale; the
         ignored loss becomes the cost of the bonus securities still held. Window boundaries are
         a best guess (docs/OPEN_QUESTIONS.md Q-014).
+
+        The rule is per person, not per demat account: bonus shares still held in any of the
+        person's accounts count (the selling account's are used first).
         """
-        queue = self.lots(instrument)
+        queues = [self.lots(instrument, account)] + [
+            q for (acct, inst), q in self._lots.items() if inst == instrument and acct != account]
         for index in range(first_new, len(self._disposals)):
             disposal = self._disposals[index]
             if disposal.gain >= 0:
@@ -121,19 +151,19 @@ class FifoBook:
                 sold_in_window = record < disposal.sold_on <= add_months(record, 9)
                 lot_id = bonus_lot_id(action)
                 # (c) bonus shares already allotted and still held after the sale.
-                held = [i for i, lot in enumerate(queue)
+                held = [(q, i) for q in queues for i, lot in enumerate(q)
                         if lot.source_trade_id == lot_id and lot.acquired_on <= disposal.sold_on]
                 if not (bought_in_window and entitled and sold_in_window and held):
                     continue
                 loss = -disposal.gain
                 self._disposals[index] = replace(disposal, stripped_loss=loss)
-                bonus = queue[held[0]]
-                queue[held[0]] = replace(bonus, value=bonus.value + loss)
+                queue, at = held[0]
+                queue[at] = replace(queue[at], value=queue[at].value + loss)
                 break
 
     def _apply(self, trade: Trade) -> None:
         is_buy = trade.side is Side.BUY
-        queue = self.lots(trade.instrument)
+        queue = self.lots(trade.instrument, trade.account)
         if not is_buy and trade.segment is not Segment.FNO and not self._allow_short:
             held = sum((lot.quantity for lot in queue if lot.is_long), Decimal(0))
             if held < trade.quantity:  # checked up front so a failed sell leaves the book intact
@@ -144,7 +174,7 @@ class FifoBook:
                     )
                 self._shortfalls.append(Shortfall(
                     trade.trade_id, trade.instrument, trade.trade_date,
-                    trade.quantity - held, trade.price, trade.segment))
+                    trade.quantity - held, trade.price, trade.segment, trade.account))
                 if held <= 0:
                     return
                 trade, _ = trade.split(held)
@@ -173,6 +203,8 @@ class FifoBook:
                 source_trade_id=trade.trade_id,
                 segment=trade.segment,
                 intraday=self._allow_short,
+                account=trade.account,
+                entered_on=trade.entered_on,
             )
         )
 
@@ -184,16 +216,22 @@ class FifoBook:
                 "aren't supported yet (docs/OPEN_QUESTIONS.md Q-023)"
             )
             return
-        queue = self.lots(action.instrument)
-        if isinstance(action, Split):
-            lots, warnings = apply_split(list(queue), action)
-            queue.clear()
-            queue.extend(lots)
-        else:
-            lot, warnings = bonus_lot(list(queue), action)
-            if lot is not None:
-                _enqueue(queue, lot)
-                self._bonuses.setdefault(action.instrument, []).append(action)
+        # The action applies to the holding in every account, each on its own.
+        keys = [k for k in self._lots if k[1] == action.instrument] or [(None, action.instrument)]
+        warnings: list[str] = []
+        for key in keys:
+            queue = self.lots(action.instrument, key[0])
+            if isinstance(action, Split):
+                lots, notes = apply_split(list(queue), action)
+                queue.clear()
+                queue.extend(lots)
+            else:
+                lot, notes = bonus_lot(list(queue), action)
+                if lot is not None:
+                    _enqueue(queue, replace(lot, account=key[0]))
+            warnings += [n for n in notes if n not in warnings]
+        if isinstance(action, Bonus):
+            self._bonuses.setdefault(action.instrument, []).append(action)
         self._warnings.extend(warnings)
 
     def result(self) -> MatchResult:
@@ -205,11 +243,18 @@ class FifoBook:
             for lot in open_lots
             if lot.intraday
         ]
+        warnings += [
+            f"{t.transfer_id}: moving {t.quantity} {t.instrument} from "
+            f"{t.from_account or 'the unnamed account'} on {t.on}, but {gap} weren't held there; "
+            "only what was held was moved"
+            for t, gap in self._transfer_gaps
+        ]
         return MatchResult(
             disposals=tuple(self._disposals),
             open_lots=open_lots,
             warnings=tuple(warnings),
             shortfalls=tuple(self._shortfalls),
+            transfer_gaps=tuple(self._transfer_gaps),
         )
 
 
@@ -220,21 +265,29 @@ def match_fifo(
     *,
     allow_short: bool = False,
     collect_shortfalls: bool = False,
+    transfers: Iterable[Transfer] = (),
 ) -> MatchResult:
-    """Match trades FIFO, applying corporate actions on their ex-dates.
+    """Match trades FIFO per (account, instrument), applying corporate actions on their
+    ex-dates and transfers between the user's accounts on their dates.
 
-    Events are ordered by date; on the same date corporate actions come before trades
-    (trades on the ex-date are at post-action prices). Input order is kept within a day.
+    Events are ordered by date. On one date: corporate actions first (trades on the ex-date
+    are at post-action prices), then transfers (shares must be in an account to be sold
+    from it, and a purchase settles a day later so can't be moved the same day), then trades
+    in input order.
     """
     book = FifoBook(opening_lots, allow_short=allow_short,
                     collect_shortfalls=collect_shortfalls)
-    events: list[tuple[date, int, Trade | CorporateAction]] = [
+    events: list[tuple[date, int, Trade | CorporateAction | Transfer]] = [
         (a.ex_date, 0, a) for a in actions
     ]
-    events += [(t.trade_date, 1, t) for t in trades]
+    events += [(t.on, 1, t) for t in transfers]
+    # A purchase that arrived from another of the user's accounts joins this one on arrival.
+    events += [(t.entered_on or t.trade_date, 2, t) for t in trades]
     for _, _, event in sorted(events, key=lambda e: (e[0], e[1])):
         if isinstance(event, Trade):
             book.apply(event)
+        elif isinstance(event, Transfer):
+            book.apply_transfer(event)
         else:
             book.apply_action(event)
     return book.result()
@@ -259,16 +312,19 @@ def _disposal(lot: Lot, closing: Trade) -> Disposal:
         close_trade_id=closing.trade_id,
         split_factor=lot.split_factor,
         segment=lot.segment,
+        account=lot.account,
     )
 
 
 def _enqueue(queue: deque[Lot], lot: Lot) -> None:
-    """Insert ``lot`` keeping the queue ordered by acquisition date (stable for equal dates).
+    """Insert ``lot`` keeping the queue ordered by entry into the account (stable for equal
+    dates). Entry is the acquisition date, except for shares moved in from another of the
+    user's accounts, which enter on the transfer date (Circular 768).
 
     Needed because a bonus lot is dated at allotment, which can be after buys made on or just
-    after the ex-date; FIFO follows the order shares were acquired.
+    after the ex-date; FIFO follows the order shares came into the account.
     """
     index = len(queue)
-    while index > 0 and queue[index - 1].acquired_on > lot.acquired_on:
+    while index > 0 and queue[index - 1].entry > lot.entry:
         index -= 1
     queue.insert(index, lot)
