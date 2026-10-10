@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from "react";
-import { rpc } from "../engine";
+import { useEffect, useState, type FormEvent } from "react";
+import { fileToBase64, rpc } from "../engine";
+import { Backup } from "./Backup";
 import { useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
 
 type Broker = "zerodha" | "upstox" | "angelone" | "mapped" | "cas";
@@ -178,15 +179,6 @@ function History() {
   );
 }
 
-async function toBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
 const added = (result: ImportResult) => result.files.reduce((n, f) => n + f.added, 0);
 
 export function ImportScreen() {
@@ -200,6 +192,9 @@ export function ImportScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [last, setLast] = useState<ImportResult | null>(null);
+  // The last import's summary belongs to the data it was made in: forget it when the person
+  // changes or a backup is restored.
+  useEffect(() => setLast(null), [session.profileId, session.revision]);
   const source = SOURCES.find((s) => s.id === broker)!;
   const missingColumns = broker === "mapped"
     ? MAPPED_FIELDS.filter((f) => f.required && !mapping[f.field]?.trim()).map((f) => f.label)
@@ -217,7 +212,7 @@ export function ImportScreen() {
       const params = {
         broker,
         password: password || undefined,
-        files: await Promise.all(files.map(async (f) => ({ name: f.name, data_base64: await toBase64(f) }))),
+        files: await Promise.all(files.map(async (f) => ({ name: f.name, data_base64: await fileToBase64(f) }))),
         ...(broker === "mapped"
           ? { mapping, key: brokerName.toUpperCase().replace(/[^A-Z0-9]/g, "") || "MAPPED", source: `${brokerName} (mapped)` }
           : {}),
@@ -299,7 +294,7 @@ export function ImportScreen() {
               ...(missingVenue ? ["exchange or segment"] : [])].join(", ")}
           </p>
         )}
-        <button type="submit" className="primary" disabled={busy || files.length === 0 || (broker === "cas" && !password)
+        <button type="submit" className="primary" disabled={busy || session.working || files.length === 0 || (broker === "cas" && !password)
           || missingColumns.length > 0 || missingIds || missingVenue}>
           {busy ? "Importing…" : "Import files"}
         </button>
@@ -334,6 +329,8 @@ export function ImportScreen() {
         )}
         <History />
       </section>
+
+      <Backup />
     </div>
   );
 }

@@ -386,3 +386,28 @@ def test_mark_filed_refuses_figures_that_changed_on_screen(ledger_dir: Path) -> 
     bad = call("ledger_mark_filed", profile_id=person, year=2025, trades=trades,
                shown={"summary": {}})
     assert "malformed" in bad["error"]["message"]
+
+
+def test_ledger_backup_and_restore(ledger_dir: Path) -> None:
+    person = ok("ledger_profile", name="Synthetic")["profile"]["id"]
+    ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
+    backup = ok("ledger_backup")
+    assert backup["name"].startswith("kosh-backup-") and backup["name"].endswith(".kosh")
+    ok("ledger_undo", profile_id=person, batch_id=ok("ledger_state", profile_id=person)
+       ["batches"][0]["id"])
+    assert ok("ledger_state", profile_id=person)["trades"] == []
+    restored = ok("ledger_restore", data_base64=backup["data_base64"])
+    assert "kosh.sqlite.before-restore-" in restored["before"]
+    assert [p["name"] for p in restored["profiles"]] == ["Synthetic"]
+    assert len(ok("ledger_state", profile_id=person)["trades"]) == 2
+    assert "base64" in call("ledger_restore")["error"]["message"]
+    assert "base64" in call("ledger_restore", data_base64="!!")["error"]["message"]
+    assert "not an SQLite file" in call("ledger_restore", data_base64=b64("junk" * 300))[
+        "error"]["message"]
+
+
+def test_ledger_restore_size_cap(ledger_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from engine import rpc
+
+    monkeypatch.setattr(rpc, "MAX_IMPORT_BYTES", 10)
+    assert "larger than" in call("ledger_restore", data_base64=b64("x" * 11))["error"]["message"]
