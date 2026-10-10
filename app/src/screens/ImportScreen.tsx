@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { fileToBase64, rpc } from "../engine";
 import { inr } from "../report";
 import { Backup } from "./Backup";
+import { CompanyNames } from "./CompanyNames";
 import { OpeningForm, TemplateButton } from "./OpeningHoldings";
 import { ledgerFields, useSession, type FundClass, type ImportBatch, type LedgerState, type Session, type Trade } from "../state";
 
@@ -504,6 +505,8 @@ export function ImportScreen() {
         )}
         <History />
       </section>
+
+      <CompanyNames />
 
       <Backup />
     </div>
