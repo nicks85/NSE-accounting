@@ -27,6 +27,7 @@ from engine.matching.fifo import Shortfall, match_fifo
 from engine.models import CHARGE_KINDS, Disposal, Lot, Segment, Side, Trade, Transfer
 from engine.money import ZERO
 from engine.notices import Notice
+from engine.residency import RESIDENCY
 from engine.rules import common, pack_for_year
 from engine.rules.base import Citation, RulePack
 from engine.rules.rounding import round_to_ten
@@ -34,6 +35,7 @@ from engine.rules.setoff import LossEntry, SetOffResult, set_off
 
 __all__ = [
     "MANUAL_PREFIX",
+    "RESIDENCY",
     "ChargesByType",
     "FundClass",
     "LossEntry",
@@ -48,6 +50,8 @@ __all__ = [
     "held_on",
     "unclassified_funds",
 ]
+
+
 
 SCOPE_NOTE = Notice(
     "SCOPE",
@@ -82,6 +86,8 @@ class TaxYearReport:
     """Shortfalls in this year the user chose to leave out; totals are labelled (Q-031)."""
     lapsed: tuple[LossEntry, ...] = ()
     """Brought-forward losses not set off because their year's return was filed late."""
+    residency: str = "RES"
+    """Residential status for the year (brief 0006): changes notices, not figures."""
     not_carried: tuple[LossEntry, ...] = ()
     """This year's own unabsorbed losses, which don't carry forward because this year's
     return was filed late (2025 Act s.121; 1961 Act s.80)."""
@@ -119,6 +125,7 @@ def compute_tax_year(
     excluded: Iterable[str] = (),
     late_returns: Iterable[int] = (),
     transfers: Iterable[Transfer] = (),
+    residency: str = "RES",
 ) -> TaxYearReport:
     """Compute one tax year (``start_year`` 2024 → FY 2024-25).
 
@@ -139,6 +146,8 @@ def compute_tax_year(
     Trades carry the demat account they were made in, and FIFO runs per account (CBDT
     Circular 768; brief 0003). ``transfers`` move shares between the user's own accounts.
     """
+    if residency not in RESIDENCY:
+        raise ValueError(f"residency must be one of {', '.join(RESIDENCY)}, not {residency!r}")
     pack = pack_for_year(start_year)
     late = set(late_returns)
     offered = list(brought_forward)
@@ -294,6 +303,7 @@ def compute_tax_year(
             "check them against contract notes or a demat holding statement. Cost and date "
             "rules for IPO, bonus, gift, inheritance and ESOP shares are a best guess (see "
             "docs/OPEN_QUESTIONS.md Q-029).", question="Q-029"))
+    warnings += _residency_notices(residency)
     warnings.append(SCOPE_NOTE)
 
     return TaxYearReport(
@@ -311,7 +321,31 @@ def compute_tax_year(
         excluded_sales=left_out,
         lapsed=lapsed,
         not_carried=not_carried,
+        residency=residency,
     )
+
+
+def _residency_notices(residency: str) -> list[Notice]:
+    """What a residential status changes (brief 0006). Kosh applies neither the shortfall nor
+    the rebate, so these explain rather than change the figure. Both Acts' sections are given:
+    a year up to FY 2025-26 is governed by the 1961 Act, later years by the 2025 Act."""
+    if residency == "NRI":
+        return [Notice(
+            "RESIDENCY",
+            "Non-resident this year: the basic-exemption shortfall (1961 Act s.111A(1) proviso, "
+            "s.112A(2); 2025 Act s.196(2), s.198(3)) and the rebate (1961 Act s.87A; 2025 Act "
+            "s.156) don't apply, and the figure includes neither. The rates and the ₹1.25 lakh "
+            "exemption are the same as for residents (2025 Act s.196(1), s.198(2)). Tax is "
+            "deducted at source from a non-resident's gains (1961 Act s.195; 2025 Act s.393(2), "
+            "Table Sl. No. 17): match it with Form 26AS. Relief under a tax treaty (DTAA) isn't "
+            "computed.", question="Q-028")]
+    who = "Resident" if residency == "RES" else "Resident but not ordinarily resident"
+    return [Notice(
+        "RESIDENCY",
+        f"{who} this year: if your other income is below the basic exemption limit, your "
+        "special-rate gains are reduced by the shortfall (1961 Act s.111A(1) proviso, "
+        "s.112A(2); 2025 Act s.196(2), s.198(3)), so your actual tax may be lower than this "
+        "figure.", question="Q-028")]
 
 
 def _fy(start_year: int) -> str:
@@ -331,6 +365,7 @@ def compute_tax_years(
     excluded: Iterable[str] = (),
     late_returns: Iterable[int] = (),
     transfers: Iterable[Transfer] = (),
+    residency: Mapping[int, str] | None = None,
 ) -> list[TaxYearReport]:
     """Compute consecutive years, carrying each year's unabsorbed losses into the next.
 
@@ -349,7 +384,8 @@ def compute_tax_years(
                                   fund_classes={**(fund_classes or {}),
                                                 **(fund_classes_by_year or {}).get(year, {})},
                                   brought_forward=carried, excluded=excluded_list,
-                                  late_returns=late, transfers=moves)
+                                  late_returns=late, transfers=moves,
+                                  residency=(residency or {}).get(year, "RES"))
         reports.append(report)
         carried = list(report.carried_forward)
     return reports

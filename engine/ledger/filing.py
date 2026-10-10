@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
+from engine.residency import RESIDENCY_LABEL
+
 JSON = Mapping[str, Any]
 
 
@@ -62,6 +64,11 @@ def changes(filed: JSON, now: JSON) -> list[dict[str, str | None]]:
     exists on one side only. Amounts are compared by value (``10`` equals ``10.00``)."""
     before, after = figures(filed), figures(now)
     out: list[dict[str, str | None]] = []
+    # Not a figure, but chosen in the return (Part A): a change means the return differs too.
+    was, status = filed.get("residency", "RES"), now.get("residency", "RES")
+    if was != status:
+        out.append({"item": "Residential status", "filed": RESIDENCY_LABEL.get(was, was),
+                    "now": RESIDENCY_LABEL.get(status, status)})
     for label in [*before, *(k for k in after if k not in before)]:
         old, new = before.get(label), after.get(label)
         if (old is None and new == 0) or (new is None and old == 0):

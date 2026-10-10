@@ -568,7 +568,8 @@ class Ledger:
         stored: dict[str, Any] = {
             "fund_classes": saved.fund_classes, "fmv_2018": saved.fmv_2018,
             "brought_forward": saved.brought_forward, "excluded": saved.excluded,
-            "late_returns": saved.late_returns, "transfers": self.transfers(profile_id)}
+            "late_returns": saved.late_returns, "transfers": self.transfers(profile_id),
+            "residency": saved.residency}
         trades = self.trades(profile_id) + [m.trade for m in saved.manual_buys]
         return compute_tax_years(start_years, trades, **{**stored, **inputs})
 
@@ -610,8 +611,11 @@ class Ledger:
         on_time = {int(year): bool(value) for year, value in self._db.execute(
             "SELECT start_year, return_filed_on_time FROM year_setting WHERE profile_id = ?"
             " AND return_filed_on_time IS NOT NULL ORDER BY start_year", (profile_id,))}
+        status = {int(year): str(value) for year, value in self._db.execute(
+            "SELECT start_year, residency FROM year_setting WHERE profile_id = ?"
+            " AND residency <> 'RES' ORDER BY start_year", (profile_id,))}
         return Settings(classes, frozenset(guessed), fmv, names, losses, manual, excluded,
-                        on_time)
+                        on_time, status)
 
     def save_settings(self, profile_id: int, settings: Settings) -> None:
         """Replace the profile's settings with ``settings``, all or nothing. An exclusion for a
@@ -638,8 +642,13 @@ class Ledger:
                  for e in settings.brought_forward])
             self._save_manual(profile_id, settings.manual_buys)
             # Year rows also hold the filed date, so they're updated, never deleted here.
-            self._db.execute("UPDATE year_setting SET return_filed_on_time = NULL"
-                             " WHERE profile_id = ?", (profile_id,))
+            self._db.execute("UPDATE year_setting SET return_filed_on_time = NULL,"
+                             " residency = 'RES' WHERE profile_id = ?", (profile_id,))
+            for year, status in settings.residency.items():
+                self._db.execute(
+                    "INSERT INTO year_setting (profile_id, start_year, residency)"
+                    " VALUES (?, ?, ?) ON CONFLICT (profile_id, start_year)"
+                    " DO UPDATE SET residency = excluded.residency", (profile_id, year, status))
             for year, on_time in settings.filed_on_time.items():
                 self._db.execute(
                     "INSERT INTO year_setting (profile_id, start_year, return_filed_on_time)"

@@ -316,7 +316,7 @@ def test_ledger_settings_round_trip_and_profiles(ledger_dir: Path) -> None:
     me = ok("ledger_profile")
     assert me["settings"] == {"fund_classes": {}, "unconfirmed": [], "fmv_2018": {}, "names": {},
                               "brought_forward": [], "manual_buys": [], "excluded": [],
-                              "filed_on_time": {}}
+                              "filed_on_time": {}, "residency": {}}
     person = me["profile"]["id"]
     ok("ledger_import", profile_id=person, broker="zerodha", files=[zerodha_file("a.csv", APRIL)])
     saved = ok("ledger_save_settings", profile_id=person, settings=SETTINGS)["settings"]
@@ -582,3 +582,20 @@ def test_charge_parts_travel_and_the_pdf_has_the_charges_table(ledger_dir: Path)
     assert pdf["pdf_base64"]
     bad = call("compute", year=2025, trades=[{**data, "charge_parts": {"BROKERAGE": "1"}}])
     assert "don't add up" in bad["error"]["message"]
+
+
+def test_residency_over_rpc(ledger_dir: Path) -> None:
+    person = ok("ledger_profile")["profile"]["id"]
+    saved = ok("ledger_save_settings", profile_id=person,
+               settings={"residency": {"2025": "NRI", "2024": "RES", "2023": "NOR"}})["settings"]
+    assert saved["residency"] == {"2023": "NOR", "2025": "NRI"}  # resident is the default
+    trades = [trade_to_json(t) for t in (buy("2025-05-01", 10, 100), sell("2025-07-01", 10, 120))]
+    report = ok("compute", year=2025, trades=trades, residency="NRI")
+    assert report["residency"] == "NRI"
+    assert any(w["code"] == "RESIDENCY" and "Non-resident" in w["message"]
+               for w in report["warnings"])
+    assert ok("compute", year=2025, trades=trades)["residency"] == "RES"
+    assert "residency must be" in call("compute", year=2025, trades=trades,
+                                       residency="X")["error"]["message"]
+    bad = call("ledger_save_settings", profile_id=person, settings={"residency": {"2025": "X"}})
+    assert "residency must be" in bad["error"]["message"]

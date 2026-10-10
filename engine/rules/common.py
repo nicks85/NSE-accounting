@@ -11,6 +11,19 @@ HOLDING_BOUNDARY = Citation(
     "Sale within a few days of the 12-month boundary: day-count convention assumed",
     "s.2(42A)", "s.2(101)(a),(b)", ACT_2025_URL, unverified=True, question="Q-013")
 FIFO = Citation("FIFO for demat securities", "s.45(2A)", "s.67(7)(c)", ACT_2025_URL)
+# The next three back the RESIDENCY notice (engine.api._residency_notices, brief 0006), which
+# names their sections in its text. They change no figure, so no gain line cites them.
+SHORTFALL_RESIDENT_ONLY = Citation(
+    "Basic-exemption shortfall against special-rate gains: resident individuals and HUFs only",
+    "s.111A(1) proviso, s.112(1) proviso, s.112A(2)", "s.196(2), s.197(2), s.198(3)",
+    ACT_2025_URL)
+REBATE_RESIDENT_ONLY = Citation(
+    "Rebate for resident individuals only, and not against tax on equity LTCG", "s.87A",
+    "s.156, s.198(7)", ACT_2025_URL)
+RNOR_AS_RESIDENT = Citation(
+    "A resident but not ordinarily resident counts as resident for the shortfall: \"non-"
+    "resident\" includes them only for ss.161, 174 and 312",
+    "s.6(6)", "s.2(72), s.6(13)", ACT_2025_URL)
 FIFO_PER_ACCOUNT = Citation(
     "FIFO applied separately in each demat account; shares moved in from another of your "
     "accounts queue by the date they entered (CBDT Circular 768) but keep their purchase date "
@@ -120,7 +133,8 @@ COMMON = {
         SETOFF_SAME_HEAD,
         STT_PAID_ASSUMED, SPECULATIVE, NON_SPECULATIVE, STT_BUSINESS_DEDUCTION, SETOFF_CAPITAL,
         SETOFF_INTER_HEAD, SETOFF_ORDER, INTER_HEAD_AGAINST_CG, CARRY_CAPITAL, CARRY_BUSINESS,
-        CARRY_SPECULATIVE, RETURN_OF_LOSS, FIFO_PER_ACCOUNT, BONUS_STRIPPING,
+        CARRY_SPECULATIVE, RETURN_OF_LOSS, FIFO_PER_ACCOUNT, SHORTFALL_RESIDENT_ONLY,
+        REBATE_RESIDENT_ONLY, RNOR_AS_RESIDENT, BONUS_STRIPPING,
         BONUS_STRIPPING_WINDOW,
         ROUNDING,
     )

@@ -55,6 +55,10 @@ class Settings:
     """Start year → whether that year's return was filed by the due date (Q-011). A year
     that isn't listed is unknown."""
 
+    residency: Mapping[int, str] = field(default_factory=lambda: MappingProxyType({}))
+    """Start year → residential status ("NOR" or "NRI"); a year not listed is resident
+    ("RES", the default) (brief 0006)."""
+
     @property
     def late_returns(self) -> tuple[int, ...]:
         return tuple(sorted(y for y, on_time in self.filed_on_time.items() if not on_time))
@@ -66,6 +70,9 @@ class Settings:
         unknown = self.guessed - set(self.fund_classes)
         if unknown:
             raise ValueError(f"guessed classes with no class: {sorted(unknown)}")
+        bad = sorted(s for s in self.residency.values() if s not in ("RES", "NOR", "NRI"))
+        if bad:
+            raise ValueError(f"residency must be RES, NOR or NRI, not {bad[0]!r}")
         ids = [m.trade.trade_id for m in self.manual_buys]
         if len(ids) != len(set(ids)):
             raise ValueError("hand-entered purchases need distinct ids")
